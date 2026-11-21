@@ -41,7 +41,7 @@ function syncChecksums(appRoot, log = () => {}) {
     if (product.checksums[key] !== hash) { product.checksums[key] = hash; dirty = true; }
   }
   if (dirty) {
-    writeAtomic(productPath, JSON.stringify(product, null, 2));
+    writeAtomic(productPath, JSON.stringify(product, null, '\t'));
     log('checksums-synced');
   }
   return dirty;
@@ -81,7 +81,10 @@ function applyInjection({ appRoot, source, log = () => {} } = {}) {
         return { ok: false, changed, reason: 'html_write_failed', error };
       }
     }
-    try { if (syncChecksums(appRoot, log)) changed = true; }
+    // A checksums-only resync (e.g. devin-zh-hans or a Devin update touched
+    // other listed files) must not count as a change: only our script file
+    // or our tag justifies a reload prompt.
+    try { syncChecksums(appRoot, log); }
     catch (error) { log('checksums-sync-failed', { code: error?.code }); return { ok: false, changed, reason: 'checksums_failed', error }; }
     return { ok: true, changed };
   } catch (error) {
@@ -109,7 +112,7 @@ function removeInjection({ appRoot, log = () => {} } = {}) {
       changed = true;
       log('picker-script-removed');
     }
-    try { if (syncChecksums(appRoot, log)) changed = true; }
+    try { syncChecksums(appRoot, log); }
     catch (error) { log('checksums-sync-failed', { code: error?.code }); }
   } catch (error) {
     log('picker-remove-failed', { code: error?.code });

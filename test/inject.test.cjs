@@ -71,6 +71,19 @@ test('remove deletes only our tag and file, then restores checksum consistency',
   assert.equal(inject.removeInjection({ appRoot }).changed, false);
 });
 
+test('a checksums-only resync for other files is not reported as changed', t => {
+  const { appRoot, dir, workbenchHtml } = fakeApp(t);
+  inject.applyInjection({ appRoot, source: SOURCE });
+  // Another injector or a Devin update touched a different checksummed file.
+  fs.writeFileSync(path.join(dir, 'workbench.js'), '// workbench updated\n');
+  const result = inject.applyInjection({ appRoot, source: SOURCE });
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, false, 'no reload prompt for foreign checksum drift');
+  const sums = checksums(appRoot);
+  assert.equal(sums['vs/code/electron-browser/workbench/workbench.js'], sha(path.join(dir, 'workbench.js')),
+    'checksums still resynchronized');
+});
+
 test('missing workbench anchor reports anchor_missing without writes', t => {
   const { appRoot, workbenchHtml, dir } = fakeApp(t);
   fs.writeFileSync(workbenchHtml, '<html>no anchor</html>');

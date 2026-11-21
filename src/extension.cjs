@@ -160,7 +160,7 @@ async function activate(context) {
     }
     return result;
   };
-  applyPicker();
+  // applyPicker runs from enable() (skipped entirely while disabled).
   const nativeMain = (() => {
     try {
       const native = vscode.extensions.getExtension('codeium.windsurf');
@@ -255,6 +255,9 @@ async function activate(context) {
   };
   async function enable() {
     await installAcp();
+    // Idempotent; re-applying here also re-injects when the user re-enables
+    // the extension from the settings webview.
+    applyPicker();
     const generation = ++activationGeneration;
     runtimeWaitAbort?.abort();
     const waiting = new AbortController(); runtimeWaitAbort = waiting;

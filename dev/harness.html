@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>devin-model-picker harness</title>
+<style>
+  body { margin:0; font:13px/1.5 -apple-system,"Segoe UI",sans-serif; }
+  body.dark { background:#16181d; color:#e7e9ec; }
+  body:not(.dark) { background:#f4f5f7; color:#1f2329; }
+  #composer { position:fixed; left:5%; right:5%; bottom:28px; padding:14px 16px;
+    border:1px solid #8884; border-radius:12px; display:flex; align-items:center; gap:10px; }
+  #composer button { border:1px solid #8886; background:transparent; color:inherit;
+    border-radius:8px; padding:5px 12px; font-size:12px; cursor:pointer; }
+  #dmp-harness-log { position:fixed; top:12px; right:12px; width:380px; max-height:45vh;
+    overflow:auto; white-space:pre-wrap; font:11px ui-monospace,Consolas,monospace;
+    border:1px solid #8884; border-radius:8px; padding:8px; opacity:.85; }
+  #theme { position:fixed; top:12px; left:12px; }
+</style>
+</head>
+<body class="dark">
+<button id="theme">切换明暗主题</button>
+<div id="composer"> composer mock </div>
+<pre id="dmp-harness-log">harness log</pre>
+<script src="./fixture.js"></script>
+<script>
+  const fixture = window.DMP_FIXTURE;
+  const { button } = window.DMP_FIBER({ visibleModelConfigs: fixture.visibleModelConfigs, pickerProps: {} });
+  document.getElementById('composer').appendChild(button);
+  document.getElementById('theme').addEventListener('click', () => document.body.classList.toggle('dark'));
+</script>
+<script src="../media/picker.js"></script>
+</body>
+</html>

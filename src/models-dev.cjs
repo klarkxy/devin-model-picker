@@ -9,6 +9,9 @@ const MODELS_DEV_URL = 'https://models.dev/api.json';
 const TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 30000;
 const FIRST_PARTY = ['anthropic', 'openai', 'google', 'deepseek', 'moonshotai', 'xai', 'zai', 'alibaba', 'mistral', 'minimax'];
+// Keep chat-like types only; untyped entries stay. models.dev uses 'chat' for
+// language models; image/embedding/audio/etc. are skipped.
+const CHAT_TYPES = new Set(['chat', 'language', 'text']);
 
 function normalizeId(id) {
   return String(id || '').split('/').at(-1).toLowerCase().replace(/[._]/g, '-');
@@ -56,8 +59,7 @@ function buildIndex(apiJson) {
     const models = section && typeof section === 'object' ? section.models : null;
     if (!models || typeof models !== 'object') continue;
     for (const entry of Object.values(models)) {
-      // Skip embedding/image/audio-like non-chat types; untyped entries stay.
-      if (typeof entry?.type === 'string' && entry.type !== 'language') continue;
+      if (typeof entry?.type === 'string' && !CHAT_TYPES.has(entry.type)) continue;
       const key = normalizeId(entry?.id);
       if (!key) continue;
       const derived = derive(providerId, entry);

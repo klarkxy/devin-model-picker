@@ -8,3 +8,4 @@ qa/
 logs/
 *.local
 .model-picker-storage.json
+dev/screenshots/

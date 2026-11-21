@@ -26,9 +26,12 @@ test('buildIndex prefers canonical self-references then first-party order, skips
   });
   assert.equal(canonical.get('m').name, 'canon');
   const typed = dev.buildIndex({ p: { id: 'p', models: {
-    emb: { id: 'emb', type: 'embedding' }, chat: { id: 'chat', type: 'language' } } } });
+    emb: { id: 'emb', type: 'embedding' }, img: { id: 'img', type: 'image' },
+    chat: { id: 'chat', type: 'chat' }, lang: { id: 'lang', type: 'language' },
+    txt: { id: 'txt', type: 'text' }, plain: { id: 'plain' } } } });
   assert.equal(typed.has('emb'), false);
-  assert.equal(typed.has('chat'), true);
+  assert.equal(typed.has('img'), false);
+  for (const kept of ['chat', 'lang', 'txt', 'plain']) assert.equal(typed.has(kept), true, kept);
 });
 
 test('lookup retries after stripping date suffixes and -latest', () => {
