@@ -27,3 +27,7 @@ npm run package   # node scripts/package.cjs → devin-model-picker-<version>.vs
 - BYOK uids `dmp-*`, fusion uids `fusion-dmp-a|b`; secrets never appear in catalog or `/picker/*` responses
 - Backend re-reads `config.json` and rebuilds the catalog on every request
 - Injection only ever touches our own tag/file; never modify the real Devin install in tests
+
+## Releasing a VSIX for testing
+
+Bump `version` in package.json before every VSIX handed to the user: reinstalling the same version does not overwrite the installed extension files.
