@@ -77,17 +77,51 @@
         fakeProviders.push(provider);
       }
       if (!provider.models.some(item => item.id === entry.modelId)) {
-        provider.models.push({ id: entry.modelId, label: entry.providerName + ' · ' + entry.modelId });
+        provider.models.push({ id: entry.modelId, label: entry.providerName + ' · ' + entry.modelId, enabled: true });
       }
     }
-    window.DMP_DISCOVER_MODELS = window.DMP_DISCOVER_MODELS || [
-      { id: 'harness-alpha', label: 'Harness Alpha', contextWindow: 256000, efforts: [null, 'high'], supportsImages: true },
-      { id: 'harness-beta', label: 'Harness Beta', contextWindow: 128000, efforts: [null, 'medium', 'high'] },
-      { id: 'harness-gamma', label: 'Harness Gamma', contextWindow: 64000, efforts: [null] },
-    ];
-    const publicProviders = () => ({
-      providers: fakeProviders.map(({ apiKey, ...rest }) => ({ ...rest, keyConfigured: !!apiKey })),
+    // Fake gateway with ~200 models — the renderer connects to it with only URL + key.
+    window.DMP_GATEWAY_MODELS = window.DMP_GATEWAY_MODELS || Array.from({ length: 200 }, (_, i) => ({
+      id: 'gw-model-' + String(i + 1).padStart(3, '0'),
+      label: 'Gateway Model ' + (i + 1),
+      contextWindow: 128000,
+      efforts: i % 7 === 0 ? [null, 'high'] : [null],
+      supportsImages: i % 11 === 0,
+    }));
+    const providerView = provider => ({
+      id: provider.id, name: provider.name, baseUrl: provider.baseUrl,
+      apiFormat: provider.apiFormat, keyConfigured: !!provider.apiKey,
+      models: provider.models.map(model => ({ id: model.id, label: model.label,
+        enabled: model.enabled !== false, contextWindow: model.contextWindow,
+        efforts: model.efforts, supportsImages: model.supportsImages === true,
+        missing: model.missing === true })),
     });
+    const publicProviders = () => ({
+      providers: fakeProviders.map(provider => providerView(provider)),
+    });
+    // Rebuild this provider's byok/visibleModelConfigs entries from enabled models,
+    // mimicking the host re-reading config.json after a write.
+    const syncByok = provider => {
+      for (const uid of Object.keys(effectiveState.byok)) {
+        if (effectiveState.byok[uid].providerId === provider.id) delete effectiveState.byok[uid];
+      }
+      for (let i = visibleModelConfigs.length - 1; i >= 0; i--) {
+        if (String(visibleModelConfigs[i].modelUid).startsWith('dmp-' + provider.id + '-')) visibleModelConfigs.splice(i, 1);
+      }
+      for (const model of provider.models) {
+        if (model.enabled === false) continue;
+        const efforts = model.efforts && model.efforts.length ? model.efforts : [null];
+        for (let i = 0; i < efforts.length; i++) {
+          const uid = 'dmp-' + provider.id + '-' + model.id + '-' + i;
+          const label = provider.name + ' · ' + model.label
+            + (efforts[i] ? ' ' + efforts[i][0].toUpperCase() + efforts[i].slice(1) : '');
+          effectiveState.byok[uid] = { uid, providerId: provider.id, providerName: provider.name,
+            modelId: model.id, label, effort: efforts[i], efforts: model.efforts };
+          visibleModelConfigs.push({ modelUid: uid, label,
+            familyUid: 'dmp-fam-' + provider.id + '-' + model.id, familyLabel: model.label });
+        }
+      }
+    };
     const ok = body => new Response(JSON.stringify(body), { status: 200 });
     const bad = message => new Response(JSON.stringify({ error: 'invalid_input', message }), { status: 400 });
     window.fetch = async (url, options = {}) => {
@@ -116,29 +150,83 @@
         fakeProviders.push(provider);
         return ok({ id: provider.id });
       }
+      if (path.endsWith('/picker/providers/connect')) {
+        const body = JSON.parse(options.body || '{}');
+        if (!body.baseUrl || !body.apiKey) return bad('请填写 API 地址和 API Key。');
+        if (String(body.baseUrl).includes('bad-key')) return bad('API Key 无效。');
+        let provider = body.id ? fakeProviders.find(item => item.id === body.id) : null;
+        if (body.id && !provider) return bad('该供应商已不存在。');
+        const host = String(body.baseUrl).replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+          .replace(/^(api|www)\./, '') || 'gateway';
+        if (!provider) {
+          provider = { id: 'prov-' + (fakeProviders.length + 1), name: host,
+            baseUrl: body.baseUrl, apiFormat: 'openai-responses', apiKey: body.apiKey, models: [] };
+          fakeProviders.push(provider);
+        } else {
+          provider.baseUrl = body.baseUrl;
+          provider.apiKey = body.apiKey;
+        }
+        const upstream = new Set(window.DMP_GATEWAY_MODELS.map(model => model.id));
+        for (const model of window.DMP_GATEWAY_MODELS) {
+          const existing = provider.models.find(item => item.id === model.id);
+          if (existing) { existing.missing = false; continue; }
+          provider.models.push({ ...model, enabled: false, missing: false });
+        }
+        for (const model of provider.models) {
+          if (upstream.has(model.id)) continue;
+          if (model.enabled === false) model.dead = true; else model.missing = true;
+        }
+        provider.models = provider.models.filter(model => !model.dead);
+        syncByok(provider);
+        return ok({ provider: providerView(provider) });
+      }
+      if (path.endsWith('/picker/providers/refresh')) {
+        const body = JSON.parse(options.body || '{}');
+        const provider = fakeProviders.find(item => item.id === body.id);
+        if (!provider) return bad('该供应商已不存在。');
+        const upstream = new Set(window.DMP_GATEWAY_MODELS.map(model => model.id));
+        for (const model of window.DMP_GATEWAY_MODELS) {
+          const existing = provider.models.find(item => item.id === model.id);
+          if (existing) { existing.missing = false; continue; }
+          provider.models.push({ ...model, enabled: false, missing: false });
+        }
+        for (const model of provider.models) {
+          if (upstream.has(model.id)) continue;
+          if (model.enabled === false) model.dead = true; else model.missing = true;
+        }
+        provider.models = provider.models.filter(model => !model.dead);
+        syncByok(provider);
+        return ok({ provider: providerView(provider) });
+      }
+      if (path.endsWith('/picker/providers/update')) {
+        const body = JSON.parse(options.body || '{}');
+        const provider = fakeProviders.find(item => item.id === body.id);
+        if (!provider) return bad('该供应商已不存在。');
+        if (body.name) provider.name = body.name;
+        if (body.apiFormat) provider.apiFormat = body.apiFormat;
+        if (body.apiKey) provider.apiKey = body.apiKey;
+        syncByok(provider);
+        return ok({ provider: providerView(provider) });
+      }
+      if (path.endsWith('/picker/models/enabled')) {
+        const body = JSON.parse(options.body || '{}');
+        const provider = fakeProviders.find(item => item.id === body.providerId);
+        if (!provider) return bad('该供应商已不存在。');
+        if (!Array.isArray(body.modelIds) || typeof body.enabled !== 'boolean') return bad('参数无效。');
+        for (const id of body.modelIds) {
+          const model = provider.models.find(item => item.id === id);
+          if (model) model.enabled = body.enabled;
+        }
+        syncByok(provider);
+        return ok({ ok: true });
+      }
       if (path.endsWith('/picker/providers/discover')) {
         const body = JSON.parse(options.body || '{}');
         const provider = fakeProviders.find(item => item.id === body.id);
         if (!provider) return bad('该供应商已不存在。');
-        return ok({ token: 'harness-token', models: window.DMP_DISCOVER_MODELS.map(model => ({
-          ...model, imported: provider.models.some(item => item.id === model.id) })) });
+        return ok({ token: 'harness-token', models: [] });
       }
       if (path.endsWith('/picker/providers/import')) {
-        const body = JSON.parse(options.body || '{}');
-        const provider = fakeProviders.find(item => item.id === body.id);
-        if (!provider) return bad('该供应商已不存在。');
-        for (const id of body.ids || []) {
-          const discovered = window.DMP_DISCOVER_MODELS.find(item => item.id === id);
-          if (!discovered) continue;
-          if (!provider.models.some(item => item.id === id)) {
-            provider.models.push({ id, label: provider.name + ' · ' + id });
-            const uid = 'dmp-' + provider.id + '-' + id + '-0';
-            effectiveState.byok[uid] = { uid, providerId: provider.id, providerName: provider.name,
-              modelId: id, label: provider.name + ' · ' + discovered.label, effort: null, efforts: discovered.efforts };
-            visibleModelConfigs.push({ modelUid: uid, label: provider.name + ' · ' + discovered.label,
-              familyUid: 'dmp-fam-' + provider.id + '-' + id, familyLabel: discovered.label });
-          }
-        }
         return ok({ ok: true });
       }
       if (path.endsWith('/picker/providers/delete')) {

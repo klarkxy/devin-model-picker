@@ -579,9 +579,6 @@ const CSS = `
 .dmp-card[data-drop="swap"]{outline:2px dashed var(--dmp-sel);outline-offset:-2px}
 .dmp-card.dmp-drag{opacity:.5}
 .dmp-star{font-size:10px;color:#f5a623;flex:none}
-.dmp-add{border-style:dashed;align-items:center;justify-content:center;min-height:96px;
- color:var(--dmp-muted);font-size:12px;background:transparent}
-.dmp-add:hover{color:var(--dmp-fg);border-color:var(--dmp-muted);background:var(--dmp-card-hover)}
 .dmp-rename{font:700 16px/1.15 inherit;color:inherit;border:1px solid var(--dmp-sel);border-radius:4px;
  background:var(--dmp-bg);padding:0 3px;min-width:0;width:100%;box-sizing:border-box}
 .dmp-menu{position:absolute;z-index:20;min-width:150px;background:var(--dmp-bg);
@@ -593,29 +590,59 @@ const CSS = `
 .dmp-showhidden{border:1px solid var(--dmp-border);border-radius:6px;background:transparent;
  color:var(--dmp-muted);font-size:11px;padding:2px 8px;cursor:pointer}
 .dmp-status{font-size:11px;color:var(--dmp-muted)}
-.dmp-sheet{position:absolute;inset:0;z-index:15;display:flex;flex-direction:column;
- background:var(--dmp-bg);border-radius:12px}
-.dmp-sheet-head{display:flex;align-items:center;gap:8px;padding:10px 12px;
- border-bottom:1px solid var(--dmp-border);font-size:13px;font-weight:600}
-.dmp-sheet-x{margin-left:auto;border:0;background:transparent;color:var(--dmp-muted);
- font-size:14px;cursor:pointer;padding:2px 6px}
-.dmp-sheet-body{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:7px}
-.dmp-sheet label.dmp-lab{font-size:11px;color:var(--dmp-muted);display:block;margin-bottom:2px}
-.dmp-sheet input[type=text],.dmp-sheet input[type=password],.dmp-sheet select{
- width:100%;box-sizing:border-box;border:1px solid var(--dmp-border);border-radius:7px;
- background:var(--dmp-bg);color:var(--dmp-fg);padding:6px 8px;font-size:12px;outline:none}
-.dmp-sheet input:focus,.dmp-sheet select:focus{border-color:var(--dmp-sel)}
-.dmp-sheet-foot{display:flex;gap:8px;justify-content:flex-end;padding:10px 12px;
- border-top:1px solid var(--dmp-border)}
 .dmp-btn{white-space:nowrap;flex:none;border:0;border-radius:7px;background:var(--dmp-sel);color:#fff;font-size:12px;
  padding:6px 12px;cursor:pointer}
 .dmp-btn:disabled{opacity:.45;cursor:default}
 .dmp-btn.sec{background:var(--dmp-chip);color:var(--dmp-fg)}
 .dmp-btn.danger{background:#dc2626;color:#fff}
-.dmp-models{flex:1;min-height:0;overflow-y:auto;border:1px solid var(--dmp-border);border-radius:8px}
-.dmp-model{display:flex;gap:7px;align-items:baseline;padding:5px 8px;font-size:12px;cursor:pointer}
-.dmp-model:hover{background:var(--dmp-card-hover)}
-.dmp-model .meta{color:var(--dmp-muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* --- Providers tab --- */
+.dmp-provtab{flex:1;min-height:0;display:none;overflow:hidden}
+.dmp-panel.dmp-mode-prov .dmp-provtab{display:flex}
+.dmp-panel.dmp-mode-prov .dmp-grid{display:none}
+.dmp-panel.dmp-mode-prov .dmp-filter{display:none}
+.dmp-plist{width:172px;flex:none;overflow-y:auto;border-right:1px solid var(--dmp-border);padding:6px}
+.dmp-pitem{display:block;width:100%;text-align:left;border:0;background:transparent;
+ color:var(--dmp-fg);padding:7px 8px;border-radius:8px;cursor:pointer;font-size:12px}
+.dmp-pitem:hover{background:var(--dmp-card-hover)}
+.dmp-pitem.dmp-on{background:var(--dmp-chip);outline:1px solid var(--dmp-sel)}
+.dmp-pitem .cnt{color:var(--dmp-muted);font-size:10px;margin-left:4px}
+.dmp-pitem.dmp-additem{color:var(--dmp-muted);border:1px dashed var(--dmp-border);margin-top:6px;text-align:center}
+.dmp-pitem.dmp-additem:hover{color:var(--dmp-fg)}
+.dmp-fmt{font-size:9px;color:var(--dmp-muted);border:1px solid var(--dmp-border);
+ border-radius:4px;padding:0 4px;margin-left:5px;white-space:nowrap}
+.dmp-pdetail{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+.dmp-pd-head{padding:10px 12px 6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+ border-bottom:1px solid var(--dmp-border)}
+.dmp-pd-name{font-size:13px;font-weight:600;cursor:text}
+.dmp-pd-url{font-size:10px;color:var(--dmp-muted);overflow:hidden;text-overflow:ellipsis;
+ white-space:nowrap;max-width:100%}
+.dmp-pd-acts{margin-left:auto;display:flex;gap:6px}
+.dmp-pd-tools{display:flex;gap:6px;align-items:center;padding:8px 12px;flex-wrap:wrap}
+.dmp-pd-tools input[type=text]{flex:1;min-width:80px}
+.dmp-chip-btn{border:1px solid var(--dmp-border);border-radius:10px;background:transparent;
+ color:var(--dmp-muted);font-size:10px;padding:2px 8px;cursor:pointer}
+.dmp-chip-btn.dmp-on{color:var(--dmp-fg);border-color:var(--dmp-sel);background:var(--dmp-chip)}
+.dmp-mlist{flex:1;min-height:0;overflow-y:auto;padding:4px 12px}
+.dmp-mrow{display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:6px}
+.dmp-mrow:hover{background:var(--dmp-card-hover)}
+.dmp-mrow .lbl{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dmp-mrow .mid{color:var(--dmp-muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;
+ white-space:nowrap;max-width:40%}
+.dmp-mrow .meta{color:var(--dmp-muted);font-size:10px;margin-left:auto;white-space:nowrap}
+.dmp-missing{font-size:9px;color:#d97706;border:1px solid #d9770655;border-radius:4px;
+ padding:0 4px;white-space:nowrap}
+.dmp-msw{flex:none;width:26px;height:15px;border-radius:8px;background:var(--dmp-chip);
+ border:1px solid var(--dmp-border);position:relative;cursor:pointer;padding:0}
+.dmp-msw .k{position:absolute;top:1px;left:1px;width:11px;height:11px;border-radius:50%;
+ background:var(--dmp-muted);transition:left .12s}
+.dmp-msw.dmp-on{background:var(--dmp-sel);border-color:var(--dmp-sel)}
+.dmp-msw.dmp-on .k{left:12px;background:#fff}
+.dmp-pdetail input[type=text],.dmp-pdetail input[type=password],.dmp-pdetail select{
+ border:1px solid var(--dmp-border);border-radius:7px;background:var(--dmp-bg);
+ color:var(--dmp-fg);padding:5px 8px;font-size:12px;outline:none}
+.dmp-pdetail input:focus,.dmp-pdetail select:focus{border-color:var(--dmp-sel)}
+.dmp-pd-form{padding:14px 12px;display:flex;flex-direction:column;gap:8px;max-width:340px}
+.dmp-lab{font-size:11px;color:var(--dmp-muted);display:block;margin-bottom:2px}
 @media (prefers-reduced-motion:reduce){.dmp-panel{transition:none}}
 `;
 
@@ -811,6 +838,9 @@ function openMenu(x, y, items) {
   menu.style.left = Math.max(4, left) + 'px';
   menu.style.top = Math.max(4, top) + 'px';
   panelState.menu = menu;
+  // A scroll already applied before the menu opened may deliver its scroll
+  // event afterwards — only close when the position actually changes again.
+  panelState.menuScroll = panel.querySelector('.dmp-grid')?.scrollTop ?? 0;
 }
 function closeMenu() {
   if (!panelState) return;
@@ -846,13 +876,28 @@ function cardMenuItems(card, resolveUid) {
   if (uid) items.push({ label: '复制模型 ID', action: () => {
     try { navigator.clipboard?.writeText(uid)?.catch?.(() => {}); } catch {} } });
   items.push({ label: card.hidden ? '取消隐藏' : '隐藏', action: () => {
-    prefs.hidden = toggleKey(prefs.hidden, key); savePrefs(); rerenderGrid(); } });
+    const hiding = !prefs.hidden.includes(key);
+    prefs.hidden = hiding ? [...prefs.hidden, key] : prefs.hidden.filter(entry => entry !== key);
+    savePrefs(); rerenderGrid();
+    const byokFams = (card.families || []).filter(family => family.providerId);
+    if (hiding && byokFams.length) {
+      for (const family of byokFams) {
+        pickerPost('/picker/models/enabled', { providerId: family.providerId,
+          modelIds: [family.modelId], enabled: false }).catch(() => {});
+      }
+      panelState.status = '已隐藏，正在刷新…';
+      renderFoot();
+      pollForRefresh();
+      refreshProviders();
+    }
+  } });
   const byokInfo = card.providerId ? card
     : (card.families || []).find(family => family.providerId) || null;
   if (byokInfo) {
-    items.push({ label: '管理供应商…', action: () => openSheet({ providerId: byokInfo.providerId }) });
-    items.push({ label: '从 BYOK 移除此模型', danger: true,
-      action: () => removeByokModel(byokInfo.providerId, byokInfo.modelId) });
+    items.push({ label: '管理供应商…', action: () => {
+      panelState.provSel = byokInfo.providerId;
+      panelState.setMode('providers');
+    } });
   }
   return items;
 }
@@ -919,23 +964,14 @@ function renameField(card, nameRow) {
   setTimeout(() => { try { input.focus(); input.select(); } catch {} }, 0);
 }
 
-// --- BYOK provider sheet -----------------------------------------------------
+// --- BYOK provider API ------------------------------------------------------
 
 async function pickerPost(path, body) {
   const res = await fetch(API_BASE + path, { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok && !data.error) return { error: 'http_' + res.status, message: '本地服务错误' };
+  if (!res.ok && !data.error) return { error: 'http_' + res.status, message: '\u672c\u5730\u670d\u52a1\u9519\u8bef' };
   return data;
-}
-
-async function removeByokModel(providerId, modelId) {
-  const res = await pickerPost('/picker/models/remove', { providerId, modelId })
-    .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
-  if (!panelState) return;
-  panelState.status = res.error ? (res.message || '移除失败') : '已移除模型，正在刷新…';
-  renderFoot();
-  if (!res.error) pollForRefresh();
 }
 
 // After a write, the catalog updates once config.json has propagated to the
@@ -955,198 +991,331 @@ async function pollForRefresh() {
   rerenderGrid();
 }
 
-function openSheet(arg) {
-  if (!panel || !panelState) return;
-  closeMenu();
-  panelState.sheet = { mode: arg?.providerId ? 'edit' : 'add', providerId: arg?.providerId || null,
-    provider: null, step: 'form', error: '', busy: false, list: [], token: '',
-    checked: new Set(), search: '', confirmDelete: false };
-  renderSheet();
-  if (arg?.providerId) {
-    fetch(API_BASE + '/picker/providers').then(res => res.json()).then(data => {
-      const sheet = panelState?.sheet;
-      if (!sheet || sheet.providerId !== arg.providerId) return;
-      sheet.provider = (data.providers || []).find(item => item.id === sheet.providerId) || null;
-      if (!sheet.provider) sheet.error = '供应商已不存在';
-      renderSheet();
-    }).catch(() => {
-      if (panelState?.sheet) { panelState.sheet.error = '本地服务未就绪'; renderSheet(); }
-    });
-  }
+async function refreshProviders() {
+  try {
+    const res = await fetch(API_BASE + '/picker/providers');
+    const data = await res.json();
+    if (panelState) panelState.providers = data.providers || [];
+  } catch { /* keep the stale list */ }
+  renderProviders();
 }
-function closeSheet() {
+
+function afterCatalogEdit(message) {
   if (!panelState) return;
-  panelState.sheet = null;
-  panel.querySelector('.dmp-sheet')?.remove();
+  panelState.status = message;
+  renderFoot();
+  pollForRefresh();
 }
 
-function renderSheet() {
-  const sheet = panelState?.sheet;
-  panel?.querySelector('.dmp-sheet')?.remove();
-  if (!panel || !sheet) return;
-  const wrap = el('div', 'dmp-sheet');
-  const head = el('div', 'dmp-sheet-head', sheet.mode === 'edit' ? '管理供应商' : '添加供应商');
-  const x = el('button', 'dmp-sheet-x', '×');
-  x.addEventListener('click', event => { event.stopPropagation(); closeSheet(); });
-  head.appendChild(x);
-  wrap.appendChild(head);
-  const body = el('div', 'dmp-sheet-body');
-  wrap.appendChild(body);
-  const foot = el('div', 'dmp-sheet-foot');
-  wrap.appendChild(foot);
-  if (sheet.step === 'form') renderSheetForm(body, foot, sheet);
-  else renderSheetList(body, foot, sheet);
-  if (sheet.error) body.appendChild(el('div', 'dmp-err', sheet.error));
-  panel.appendChild(wrap);
+// --- Providers tab -----------------------------------------------------------
+
+const FMT_LABEL = { 'openai-responses': 'Responses', openai: 'Chat', anthropic: 'Anthropic' };
+const fmtLabel = format => FMT_LABEL[format] || format || '';
+
+function devinCards() {
+  const models = panelState?.located?.host?.visibleModelConfigs || [];
+  const hidden = new Set(panelState?.prefs?.hidden || []);
+  const cards = groupCards(models, lastState)
+    .map(card => ({ ...card, families: card.families.filter(family => !family.providerId) }))
+    .filter(card => card.families.length);
+  return { cards, hidden };
 }
 
-function renderSheetForm(body, foot, sheet) {
-  const p = sheet.provider || {};
-  const mk = (labelText, type, value, placeholder) => {
-    body.appendChild(el('label', 'dmp-lab', labelText));
-    const input = el('input', '');
-    input.type = type;
-    input.value = value;
-    if (placeholder) input.placeholder = placeholder;
-    body.appendChild(input);
-    return input;
-  };
-  const fields = {
-    name: mk('名称', 'text', p.name || ''),
-    url: mk('API 地址', 'text', p.baseUrl || ''),
-    key: mk('API Key', 'password', '', sheet.mode === 'edit' ? '留空则保持不变' : ''),
-  };
-  body.appendChild(el('label', 'dmp-lab', '接口类型'));
-  const format = el('select', '');
-  for (const [value, label] of [['openai-responses', 'OpenAI Responses'],
-    ['openai-chat', 'OpenAI Chat'], ['anthropic', 'Anthropic']]) {
-    const option = el('option', '', label);
-    option.value = value;
-    if ((p.apiFormat || 'openai-responses') === value) option.selected = true;
-    format.appendChild(option);
-  }
-  body.appendChild(format);
-  if (sheet.mode === 'edit') {
-    const del = el('button', 'dmp-btn danger', sheet.confirmDelete ? '确认删除' : '删除供应商');
-    del.disabled = sheet.busy;
-    del.addEventListener('click', () => {
-      if (!sheet.confirmDelete) { sheet.confirmDelete = true; renderSheet(); return; }
-      (async () => {
-        sheet.busy = true; renderSheet();
-        const res = await pickerPost('/picker/providers/delete', { id: sheet.providerId })
-          .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
-        closeSheet();
-        if (!panelState) return;
-        panelState.status = res.error ? (res.message || '删除失败') : '已删除供应商，正在刷新…';
-        renderFoot();
-        if (!res.error) pollForRefresh();
-      })();
+function renderProviders() {
+  if (!panel || !panelState || panelState.mode !== 'providers') return;
+  const tab = panel.querySelector('.dmp-provtab');
+  if (!tab) return;
+  tab.replaceChildren();
+  const list = el('div', 'dmp-plist');
+  const detail = el('div', 'dmp-pdetail');
+  tab.appendChild(list);
+  tab.appendChild(detail);
+  const sel = panelState.provSel;
+  const devins = devinCards();
+  const devShown = devins.cards.filter(card => !devins.hidden.has(card.prefKey)).length;
+  const devItem = el('button', 'dmp-pitem' + (sel === 'devin' ? ' dmp-on' : ''));
+  devItem.appendChild(el('span', '', '\u0044evin'));
+  devItem.appendChild(el('span', 'cnt', devShown + '/' + devins.cards.length));
+  devItem.addEventListener('click', () => { panelState.provSel = 'devin'; panelState.provEdit = null; panelState.provError = ''; renderProviders(); });
+  list.appendChild(devItem);
+  for (const provider of panelState.providers || []) {
+    const shown = (provider.models || []).filter(model => model.enabled).length;
+    const item = el('button', 'dmp-pitem' + (sel === provider.id ? ' dmp-on' : ''));
+    item.appendChild(el('span', '', provider.name));
+    item.appendChild(el('span', 'cnt', shown + '/' + (provider.models || []).length));
+    item.appendChild(el('span', 'dmp-fmt', fmtLabel(provider.apiFormat)));
+    item.addEventListener('click', () => {
+      panelState.provSel = provider.id;
+      panelState.provEdit = null;
+      panelState.provConfirmDelete = false;
+      panelState.provError = '';
+      renderProviders();
     });
-    foot.appendChild(del);
+    list.appendChild(item);
   }
-  const save = el('button', 'dmp-btn', sheet.busy ? '获取中…' : '保存并获取模型');
-  save.disabled = sheet.busy;
-  save.addEventListener('click', () => {
-    const values = { name: fields.name.value, baseUrl: fields.url.value,
-      apiKey: fields.key.value, apiFormat: format.value };
-    (async () => {
-      sheet.busy = true; sheet.error = ''; renderSheet();
-      const saved = await pickerPost('/picker/providers/save', {
-        id: sheet.providerId || undefined, ...values, apiKey: values.apiKey || undefined })
-        .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
-      if (saved.error) { sheet.busy = false; sheet.error = saved.message || '保存失败'; renderSheet(); return; }
-      sheet.providerId = saved.id;
-      sheet.mode = 'edit';
-      const dis = await pickerPost('/picker/providers/discover', { id: saved.id })
-        .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
-      sheet.busy = false;
-      if (dis.error) { sheet.error = dis.message || '获取模型失败'; renderSheet(); return; }
-      sheet.token = dis.token;
-      sheet.list = dis.models || [];
-      sheet.checked = new Set(sheet.list.filter(model => model.imported).map(model => model.id));
-      sheet.step = 'list';
-      renderSheet();
-    })();
-  });
-  foot.appendChild(save);
+  const addItem = el('button', 'dmp-pitem dmp-additem' + (sel === 'add' ? ' dmp-on' : ''), '+ \u6dfb\u52a0\u4f9b\u5e94\u5546');
+  addItem.addEventListener('click', () => { panelState.provSel = 'add'; panelState.provError = ''; renderProviders(); });
+  list.appendChild(addItem);
+  if (panelState.provError) detail.appendChild(el('div', 'dmp-err', panelState.provError));
+  if (sel === 'add') renderProvAdd(detail);
+  else if (sel === 'devin') renderDevinDetail(detail, devins);
+  else {
+    const provider = (panelState.providers || []).find(item => item.id === sel);
+    if (!provider) { panelState.provSel = 'devin'; renderProviders(); return; }
+    renderProvDetail(detail, provider);
+  }
 }
 
-function renderSheetList(body, foot, sheet) {
-  const tools = el('div', '');
-  tools.style.cssText = 'display:flex;gap:6px;align-items:center';
+// Shared model-switch list: search, bulk show/hide of filtered rows, count and
+// an only-shown chip. items: [{ key, on, label, sub, meta, missing }].
+function renderModelList(box, items, { toggle, bulk }) {
+  const tools = el('div', 'dmp-pd-tools');
   const search = el('input', '');
   search.type = 'text';
-  search.placeholder = '筛选模型';
-  search.value = sheet.search;
-  tools.appendChild(search);
-  const models = el('div', 'dmp-models');
-  const fill = () => {
-    models.replaceChildren();
-    const norm = filterNorm(sheet.search);
-    for (const model of sheet.list) {
-      if (norm && !filterNorm(model.id + ' ' + (model.label || '')).includes(norm)) continue;
-      const row = el('label', 'dmp-model');
-      const cb = el('input', '');
-      cb.type = 'checkbox';
-      cb.checked = sheet.checked.has(model.id);
-      cb.addEventListener('change', () => {
-        if (cb.checked) sheet.checked.add(model.id); else sheet.checked.delete(model.id);
-      });
-      row.appendChild(cb);
-      row.appendChild(el('span', '', model.label || model.id));
-      const meta = [
-        model.contextWindow ? Math.round(model.contextWindow / 1000) + 'k' : null,
-        ...(model.efforts || []),
-      ].filter(Boolean).join(' · ');
-      if (meta) row.appendChild(el('span', 'meta', meta));
-      models.appendChild(row);
-    }
-    if (!models.childNodes.length) models.appendChild(el('div', 'dmp-empty', '没有匹配的模型'));
+  search.placeholder = '\u7b5b\u9009\u6a21\u578b';
+  search.value = panelState.provSearch || '';
+  const listEl = el('div', 'dmp-mlist');
+  const err = el('div', 'dmp-err');
+  const matches = item => {
+    const norm = filterNorm(panelState.provSearch || '');
+    return !norm || filterNorm(item.label + ' ' + (item.sub || '')).includes(norm);
   };
-  search.addEventListener('input', () => { sheet.search = search.value; fill(); });
-  const all = el('button', 'dmp-btn sec', '全选');
-  all.addEventListener('click', () => { for (const model of sheet.list) sheet.checked.add(model.id); fill(); });
-  const none = el('button', 'dmp-btn sec', '全不选');
-  none.addEventListener('click', () => { sheet.checked.clear(); fill(); });
-  tools.appendChild(all);
-  tools.appendChild(none);
-  body.appendChild(tools);
-  body.appendChild(models);
+  const count = el('span', 'dmp-status');
+  const fill = () => {
+    listEl.replaceChildren();
+    const visible = items.filter(item => matches(item) && (!panelState.provOnlyShown || item.on));
+    for (const item of visible) {
+      const row = el('div', 'dmp-mrow');
+      const sw = el('button', 'dmp-msw' + (item.on ? ' dmp-on' : ''));
+      sw.appendChild(el('span', 'k'));
+      sw.setAttribute('aria-pressed', String(item.on));
+      sw.addEventListener('click', () => toggle(item, sw));
+      row.appendChild(sw);
+      row.appendChild(el('span', 'lbl', item.label));
+      if (item.sub) row.appendChild(el('span', 'mid', item.sub));
+      if (item.missing) row.appendChild(el('span', 'dmp-missing', '\u4e0a\u6e38\u672a\u5217\u51fa'));
+      if (item.meta) row.appendChild(el('span', 'meta', item.meta));
+      listEl.appendChild(row);
+    }
+    if (!visible.length) listEl.appendChild(el('div', 'dmp-empty', '\u6ca1\u6709\u5339\u914d\u7684\u6a21\u578b'));
+    count.textContent = '\u5df2\u663e\u793a ' + items.filter(item => item.on).length + ' / ' + items.length;
+  };
+  search.addEventListener('input', () => { panelState.provSearch = search.value; fill(); });
+  const showBtn = el('button', 'dmp-btn sec', '\u663e\u793a\u7b5b\u9009\u7ed3\u679c');
+  showBtn.addEventListener('click', () => bulk(items.filter(matches).map(item => item.key), true, err));
+  const hideBtn = el('button', 'dmp-btn sec', '\u9690\u85cf\u7b5b\u9009\u7ed3\u679c');
+  hideBtn.addEventListener('click', () => bulk(items.filter(matches).map(item => item.key), false, err));
+  const only = el('button', 'dmp-chip-btn' + (panelState.provOnlyShown ? ' dmp-on' : ''), '\u53ea\u770b\u5df2\u663e\u793a');
+  only.addEventListener('click', () => { panelState.provOnlyShown = !panelState.provOnlyShown; fill(); });
+  tools.appendChild(search);
+  tools.appendChild(showBtn);
+  tools.appendChild(hideBtn);
+  tools.appendChild(only);
+  tools.appendChild(count);
+  box.appendChild(tools);
+  box.appendChild(listEl);
+  box.appendChild(err);
   fill();
-  const refetch = el('button', 'dmp-btn sec', '重新获取');
-  refetch.disabled = sheet.busy;
-  refetch.addEventListener('click', () => {
-    (async () => {
-      sheet.busy = true; sheet.error = ''; renderSheet();
-      const dis = await pickerPost('/picker/providers/discover', { id: sheet.providerId })
-        .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
-      sheet.busy = false;
-      if (dis.error) { sheet.error = dis.message || '获取模型失败'; renderSheet(); return; }
-      sheet.token = dis.token;
-      sheet.list = dis.models || [];
-      for (const model of sheet.list) if (model.imported) sheet.checked.add(model.id);
-      renderSheet();
-    })();
+}
+
+function renderProvAdd(box) {
+  const form = el('div', 'dmp-pd-form');
+  form.appendChild(el('label', 'dmp-lab', 'API \u5730\u5740'));
+  const url = el('input', '');
+  url.type = 'text';
+  url.placeholder = 'https://api.example.com';
+  form.appendChild(url);
+  form.appendChild(el('label', 'dmp-lab', 'API Key'));
+  const key = el('input', '');
+  key.type = 'password';
+  form.appendChild(key);
+  const err = el('div', 'dmp-err');
+  const submit = el('button', 'dmp-btn', '\u8fde\u63a5');
+  const connect = async () => {
+    err.textContent = '';
+    submit.disabled = true;
+    submit.textContent = '\u8fde\u63a5\u4e2d\u2026';
+    const res = await pickerPost('/picker/providers/connect',
+      { baseUrl: url.value, apiKey: key.value })
+      .catch(() => ({ error: 'service_unavailable', message: '\u672c\u5730\u670d\u52a1\u672a\u5c31\u7eea' }));
+    submit.disabled = false;
+    submit.textContent = '\u8fde\u63a5';
+    if (!panelState) return;
+    if (res.error) { err.textContent = res.message || '\u8fde\u63a5\u5931\u8d25'; return; }
+    panelState.provSel = res.provider.id;
+    await refreshProviders();
+    afterCatalogEdit('\u5df2\u8fde\u63a5 ' + res.provider.name + '\uff0c\u6b63\u5728\u5237\u65b0\u2026');
+  };
+  submit.addEventListener('click', connect);
+  key.addEventListener('keydown', event => { if (event.key === 'Enter') connect(); });
+  form.appendChild(submit);
+  form.appendChild(err);
+  box.appendChild(form);
+}
+
+function renderProvDetail(box, provider) {
+  const head = el('div', 'dmp-pd-head');
+  if (panelState.provEdit === 'rename') {
+    const input = el('input', '');
+    input.type = 'text';
+    input.value = provider.name;
+    const commit = async () => {
+      const name = input.value.trim();
+      panelState.provEdit = null;
+      if (!name || name === provider.name) { renderProviders(); return; }
+      const res = await pickerPost('/picker/providers/update', { id: provider.id, name });
+      if (res.error) panelState.provError = res.message;
+      await refreshProviders();
+    };
+    input.addEventListener('keydown', event => {
+      event.stopPropagation();
+      if (event.key === 'Enter') commit();
+      else if (event.key === 'Escape') { panelState.provEdit = null; renderProviders(); }
+    });
+    input.addEventListener('blur', commit);
+    head.appendChild(input);
+    setTimeout(() => { try { input.focus(); input.select(); } catch {} }, 0);
+  } else {
+    const name = el('span', 'dmp-pd-name', provider.name);
+    name.title = '\u70b9\u51fb\u91cd\u547d\u540d';
+    name.addEventListener('click', () => { panelState.provEdit = 'rename'; renderProviders(); });
+    head.appendChild(name);
+  }
+  const fmt = el('select', '');
+  for (const [value, label] of [['openai-responses', 'Responses'], ['openai', 'Chat'], ['anthropic', 'Anthropic']]) {
+    const option = el('option', '', label);
+    option.value = value;
+    if (provider.apiFormat === value) option.selected = true;
+    fmt.appendChild(option);
+  }
+  fmt.addEventListener('change', async () => {
+    const res = await pickerPost('/picker/providers/update', { id: provider.id, apiFormat: fmt.value });
+    if (res.error) panelState.provError = res.message || '\u66f4\u65b0\u5931\u8d25';
+    await refreshProviders();
+    afterCatalogEdit('\u5df2\u66f4\u65b0\u63a5\u53e3\u7c7b\u578b\uff0c\u6b63\u5728\u5237\u65b0\u2026');
   });
-  foot.appendChild(refetch);
-  const imp = el('button', 'dmp-btn', sheet.busy ? '导入中…' : '导入');
-  imp.disabled = sheet.busy;
-  imp.addEventListener('click', () => {
-    (async () => {
-      sheet.busy = true; sheet.error = ''; renderSheet();
-      const ids = [...sheet.checked];
-      const res = await pickerPost('/picker/providers/import',
-        { id: sheet.providerId, token: sheet.token, ids })
-        .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
-      if (res.error) { sheet.busy = false; sheet.error = res.message || '导入失败'; renderSheet(); return; }
-      closeSheet();
-      if (!panelState) return;
-      panelState.status = '已导入 ' + ids.length + ' 个模型，正在刷新…';
+  head.appendChild(fmt);
+  const acts = el('div', 'dmp-pd-acts');
+  const refresh = el('button', 'dmp-btn sec', '\u5237\u65b0\u6a21\u578b');
+  refresh.addEventListener('click', async () => {
+    refresh.disabled = true;
+    refresh.textContent = '\u5237\u65b0\u4e2d\u2026';
+    const res = await pickerPost('/picker/providers/refresh', { id: provider.id })
+      .catch(() => ({ error: 'service_unavailable', message: '\u672c\u5730\u670d\u52a1\u672a\u5c31\u7eea' }));
+    if (!panelState) return;
+    if (res.error) { refresh.disabled = false; refresh.textContent = '\u5237\u65b0\u6a21\u578b'; panelState.provError = res.message; renderProviders(); return; }
+    await refreshProviders();
+    afterCatalogEdit('\u5df2\u5237\u65b0\u6a21\u578b\u5217\u8868\uff0c\u6b63\u5728\u66f4\u65b0\u2026');
+  });
+  acts.appendChild(refresh);
+  if (panelState.provEdit === 'key') {
+    const keyInput = el('input', '');
+    keyInput.type = 'password';
+    keyInput.placeholder = '\u65b0 API Key';
+    const saveKey = async () => {
+      panelState.provEdit = null;
+      const res = await pickerPost('/picker/providers/update', { id: provider.id, apiKey: keyInput.value });
+      if (res.error) panelState.provError = res.message;
+      await refreshProviders();
+    };
+    keyInput.addEventListener('keydown', event => {
+      event.stopPropagation();
+      if (event.key === 'Enter') saveKey();
+      else if (event.key === 'Escape') { panelState.provEdit = null; renderProviders(); }
+    });
+    const saveBtn = el('button', 'dmp-btn sec', '\u4fdd\u5b58');
+    saveBtn.addEventListener('click', saveKey);
+    acts.appendChild(keyInput);
+    acts.appendChild(saveBtn);
+    setTimeout(() => { try { keyInput.focus(); } catch {} }, 0);
+  } else {
+    const keyBtn = el('button', 'dmp-btn sec', '\u66f4\u6362 Key');
+    keyBtn.addEventListener('click', () => { panelState.provEdit = 'key'; renderProviders(); });
+    acts.appendChild(keyBtn);
+  }
+  const del = el('button', 'dmp-btn danger', panelState.provConfirmDelete ? '\u786e\u8ba4\u5220\u9664' : '\u5220\u9664');
+  del.addEventListener('click', async () => {
+    if (!panelState.provConfirmDelete) { panelState.provConfirmDelete = true; renderProviders(); return; }
+    panelState.provConfirmDelete = false;
+    panelState.provSel = 'devin';
+    const res = await pickerPost('/picker/providers/delete', { id: provider.id })
+      .catch(() => ({ error: 'service_unavailable', message: '\u672c\u5730\u670d\u52a1\u672a\u5c31\u7eea' }));
+    if (!panelState) return;
+    if (res.error) { panelState.provSel = provider.id; panelState.provError = res.message; renderProviders(); return; }
+    await refreshProviders();
+    afterCatalogEdit('\u5df2\u5220\u9664\u4f9b\u5e94\u5546\uff0c\u6b63\u5728\u5237\u65b0\u2026');
+  });
+  acts.appendChild(del);
+  head.appendChild(acts);
+  box.appendChild(head);
+  const urlLine = el('div', 'dmp-pd-url', provider.baseUrl || '');
+  urlLine.style.padding = '6px 12px 0';
+  box.appendChild(urlLine);
+  const items = (provider.models || []).map(model => ({
+    key: model.id, on: model.enabled !== false, label: model.label || model.id,
+    sub: model.id, missing: model.missing === true,
+    meta: [model.contextWindow ? Math.round(model.contextWindow / 1000) + 'k' : null,
+      ...(model.efforts || []).filter(Boolean).map(effortLabel)].filter(Boolean).join(' \u00b7 '),
+  }));
+  renderModelList(box, items, {
+    async toggle(item, sw) {
+      item.on = !item.on;
+      sw.classList.toggle('dmp-on', item.on);
+      const res = await pickerPost('/picker/models/enabled',
+        { providerId: provider.id, modelIds: [item.key], enabled: item.on })
+        .catch(() => ({ error: 'service_unavailable', message: '\u672c\u5730\u670d\u52a1\u672a\u5c31\u7eea' }));
+      if (res.error) {
+        item.on = !item.on;
+        sw.classList.toggle('dmp-on', item.on);
+        panelState.provError = res.message || '\u66f4\u65b0\u5931\u8d25';
+        renderProviders();
+        return;
+      }
+      refreshProviders();
+      panelState.status = '\u6b63\u5728\u5237\u65b0\u2026';
       renderFoot();
       pollForRefresh();
-    })();
+    },
+    async bulk(keys, show, err) {
+      if (!keys.length) return;
+      const res = await pickerPost('/picker/models/enabled',
+        { providerId: provider.id, modelIds: keys, enabled: show })
+        .catch(() => ({ error: 'service_unavailable', message: '\u672c\u5730\u670d\u52a1\u672a\u5c31\u7eea' }));
+      if (res.error) { err.textContent = res.message || '\u66f4\u65b0\u5931\u8d25'; return; }
+      for (const item of items) if (keys.includes(item.key)) item.on = show;
+      refreshProviders();
+      panelState.status = '\u6b63\u5728\u5237\u65b0\u2026';
+      renderFoot();
+      pollForRefresh();
+    },
   });
-  foot.appendChild(imp);
+}
+
+function renderDevinDetail(box, devins) {
+  box.appendChild(el('div', 'dmp-pd-head', 'Devin \u81ea\u5e26\u6a21\u578b'));
+  const items = devins.cards.map(card => ({
+    key: card.prefKey, on: !devins.hidden.has(card.prefKey),
+    label: (prefAlias(card.prefKey) || card.name) + (card.version ? ' ' + card.version : '') + (card.variant ? ' ' + card.variant : ''),
+    sub: card.families[0]?.familyLabel || card.prefKey,
+    meta: (card.families[0]?.cells || []).map(cell => cell.label).join(' \u00b7 '),
+  }));
+  renderModelList(box, items, {
+    toggle(item) {
+      item.on = !item.on;
+      panelState.prefs.hidden = item.on
+        ? panelState.prefs.hidden.filter(key => key !== item.key)
+        : [...new Set([...panelState.prefs.hidden, item.key])];
+      savePrefs();
+      renderProviders();
+    },
+    bulk(keys, show) {
+      const set = new Set(panelState.prefs.hidden);
+      for (const key of keys) { if (show) set.delete(key); else set.add(key); }
+      panelState.prefs.hidden = [...set];
+      savePrefs();
+      renderProviders();
+    },
+  });
 }
 
 function chooseFamily(card, located) {
@@ -1393,6 +1562,13 @@ function rerenderGrid() {
   if (!panel || !panelState) return;
   const grid = panel.querySelector('.dmp-grid');
   if (!grid) return;
+  // Synthetic scroll events caused by the rebuild must not close an open
+  // context menu — suppress them for a frame.
+  panelState.rebuildingGrid = true;
+  const clearRebuild = () => { if (panelState) panelState.rebuildingGrid = false; };
+  requestAnimationFrame(clearRebuild);
+  setTimeout(clearRebuild, 50);
+  const scrollTop = grid.scrollTop;
   while (grid.firstChild) grid.removeChild(grid.firstChild);
   const { located, mode } = panelState;
   const models = located.host.visibleModelConfigs || [];
@@ -1417,14 +1593,24 @@ function rerenderGrid() {
     panelState.visibleCards = rendered;
     if (!shown) grid.appendChild(el('div', 'dmp-empty',
       cards.length ? '没有匹配的模型' : '暂无可用的 Fusion 模型'));
+    grid.scrollTop = scrollTop;
     renderFoot();
     return;
   }
   const oldApply = panel.querySelector('.dmp-apply'); if (oldApply) oldApply.remove();
   const oldErr = panel.querySelector('.dmp-err'); if (oldErr) oldErr.remove();
   const cards = groupCards(models, lastState);
-  panelState.fullKeys = arrangeCards(cards, panelState.prefs, true).map(card => card.prefKey);
-  const arranged = arrangeCards(cards, panelState.prefs, panelState.showHidden);
+  // Merged hide semantics: a card is hidden only when its key is in prefs.hidden
+  // AND no enabled BYOK family keeps it alive; the provider chip then offers
+  // only the visible families.
+  const hiddenSet = new Set(panelState.prefs.hidden);
+  const effective = cards
+    .filter(card => hiddenSet.has(card.prefKey) && !card.families.some(family => family.providerId))
+    .map(card => card.prefKey);
+  const arrPrefs = effective.length === panelState.prefs.hidden.length ? panelState.prefs
+    : { ...panelState.prefs, hidden: effective };
+  panelState.fullKeys = arrangeCards(cards, arrPrefs, true).map(card => card.prefKey);
+  const arranged = arrangeCards(cards, arrPrefs, panelState.showHidden);
   const rendered = [];
   let shown = 0;
   arranged.forEach(card => {
@@ -1432,13 +1618,13 @@ function rerenderGrid() {
       ...card.families.flatMap(family => [family.providerName, ...family.variants.map(variant => variant.uid + ' ' + variant.label)])];
     if (!filterMatch(panelState.filter, hay)) return;
     rendered.push(card);
-    grid.appendChild(buildCard(card, shown++, located));
+    const render = card.hidden ? card
+      : { ...card, families: card.families.filter(family => family.providerId || !hiddenSet.has(card.prefKey)) };
+    grid.appendChild(buildCard(render, shown++, located));
   });
   panelState.visibleCards = rendered;
   if (!shown) grid.appendChild(el('div', 'dmp-empty', '没有匹配的模型'));
-  const add = el('div', 'dmp-card dmp-add', '+ 添加供应商');
-  add.addEventListener('click', () => { if (!panelState?.suppressClick) openSheet(null); });
-  grid.appendChild(add);
+  grid.scrollTop = scrollTop;
   renderFoot();
 }
 
@@ -1518,22 +1704,32 @@ function openPanel(trigger, located) {
     value, activeSlot: 'lead', cardStates: new Map(),
     fusionSlots: { lead: null, sidekick: null },
     prefs: loadPrefs(), showHidden: false, menu: null, editing: null,
-    dragIndex: null, suppressClick: false, sheet: null, status: '' };
+    dragIndex: null, suppressClick: false, status: '',
+    providers: [], provSel: 'devin', provSearch: '', provOnlyShown: false,
+    provEdit: null, provConfirmDelete: false, provError: '' };
   panel = el('div', 'dmp-panel' + (isDark(trigger) ? ' dmp-dark' : ' dmp-light'));
   panel.setAttribute('data-devin-zh-skip', '');
   const toolbar = el('div', 'dmp-toolbar');
   const seg = el('div', 'dmp-seg');
   const btnSingle = el('button', panelState.mode === 'single' ? 'dmp-on' : '', '单模型');
   const btnFusion = el('button', panelState.mode === 'fusion' ? 'dmp-on' : '', 'Fusion');
+  const btnProv = el('button', panelState.mode === 'providers' ? 'dmp-on' : '', '供应商');
+  const provTab = el('div', 'dmp-provtab');
   const setMode = mode => {
     panelState.mode = mode;
     btnSingle.className = mode === 'single' ? 'dmp-on' : '';
     btnFusion.className = mode === 'fusion' ? 'dmp-on' : '';
-    rerenderGrid();
+    btnProv.className = mode === 'providers' ? 'dmp-on' : '';
+    panel.classList.toggle('dmp-mode-prov', mode === 'providers');
+    slotRow.style.display = mode === 'fusion' ? '' : 'none';
+    if (mode === 'providers') refreshProviders();
+    else rerenderGrid();
   };
+  panelState.setMode = setMode;
   btnSingle.addEventListener('click', () => setMode('single'));
   btnFusion.addEventListener('click', () => setMode('fusion'));
-  seg.appendChild(btnSingle); seg.appendChild(btnFusion);
+  btnProv.addEventListener('click', () => setMode('providers'));
+  seg.appendChild(btnSingle); seg.appendChild(btnFusion); seg.appendChild(btnProv);
   toolbar.appendChild(seg);
   const filter = el('input', 'dmp-filter');
   filter.placeholder = '输入以筛选';
@@ -1545,12 +1741,13 @@ function openPanel(trigger, located) {
   slotRow.appendChild(slotChip('sidekick', '辅助模型'));
   panel.appendChild(slotRow);
   slotRow.style.display = panelState.mode === 'fusion' ? '' : 'none';
-  const syncSlots = () => { slotRow.style.display = panelState.mode === 'fusion' ? '' : 'none'; };
-  btnSingle.addEventListener('click', syncSlots);
-  btnFusion.addEventListener('click', syncSlots);
   const grid = el('div', 'dmp-grid');
-  grid.addEventListener('scroll', closeMenu);
+  grid.addEventListener('scroll', () => {
+    if (!panelState?.menu || panelState.rebuildingGrid) return;
+    if (grid.scrollTop !== panelState.menuScroll) closeMenu();
+  });
   panel.appendChild(grid);
+  panel.appendChild(provTab);
   const foot = el('div', 'dmp-foot', '输入即可筛选 · Alt+点击打开原生菜单');
   panel.appendChild(foot);
   document.body.appendChild(panel);
@@ -1575,17 +1772,19 @@ function openPanel(trigger, located) {
   const onKey = event => {
     if (!panelState) return;
     if (event.key === 'Escape') {
-      // Innermost first: menu → inline rename → provider sheet → filter → panel.
+      // Innermost first: menu → inline rename → provider edit/confirm → filter → panel.
       if (panelState.menu) closeMenu();
       else if (panelState.editing) { panelState.editing = null; rerenderGrid(); }
-      else if (panelState.sheet) closeSheet();
+      else if (panelState.provEdit || panelState.provConfirmDelete) {
+        panelState.provEdit = null; panelState.provConfirmDelete = false; renderProviders(); }
       else if (panelState.filter) { panelState.filter = ''; filter.value = ''; rerenderGrid(); }
       else closePanel();
       event.stopPropagation();
       return;
     }
     const active = document.activeElement;
-    if (panelState.sheet || panelState.menu) return;
+    if (panelState.menu) return;
+    if (panelState.mode === 'providers') return;
     if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
       || active.tagName === 'SELECT' || active.isContentEditable)) return;
     if (event.key === 'Enter') {

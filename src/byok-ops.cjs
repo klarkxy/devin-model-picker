@@ -120,6 +120,133 @@ async function refreshMeta(config, payload, { discover, index } = {}) {
   }
 }
 
+
+// Auto-detect a provider endpoint: probes <base>/models with Bearer first,
+// then Anthropic headers on 401/403, picks the working base (/v1 appended
+// when the path has no version suffix), and classifies the API format.
+async function probeProvider({ baseUrl: raw, apiKey, fetchImpl = fetch } = {}) {
+  const key = typeof apiKey === 'string' ? apiKey.trim() : '';
+  if (!key) fail('请填写 API Key。');
+  const root = baseUrl(raw);
+  // baseUrl() already appends /v1 when the path has no version segment; the
+  // bare fallback must be derived from the user's original path.
+  const origPath = new URL(raw).pathname;
+  const hasVersion = origPath.split('/').some(segment => /^v\d+/i.test(segment));
+  const bare = root.replace(/\/v1$/, '');
+  const bases = hasVersion ? [root] : (bare !== root ? [root, bare] : [root]);
+  let working = null, auth = 'bearer', items = null, sawAuth = false, sawListless = false;
+  for (const candidate of bases) {
+    for (const mode of ['bearer', 'anthropic']) {
+      const headers = mode === 'bearer'
+        ? { Authorization: 'Bearer ' + key }
+        : { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+      let response;
+      try {
+        response = await fetchImpl(candidate + '/models', { headers, signal: AbortSignal.timeout(10000) });
+      } catch { fail('无法连接到该地址，请检查 API 地址。'); }
+      if (response.status === 401 || response.status === 403) { sawAuth = true; continue; }
+      if (!response.ok) { sawListless = true; continue; }
+      let json;
+      try { json = await response.json(); } catch { sawListless = true; continue; }
+      if (!Array.isArray(json.data)) { sawListless = true; continue; }
+      working = candidate; auth = mode; items = json.data;
+      break;
+    }
+    if (working) break;
+  }
+  if (!working) {
+    if (sawAuth && !sawListless) fail('API Key 无效。');
+    fail('该地址没有返回模型列表。');
+  }
+  const looksAnthropic = auth === 'anthropic' || items.some(item => item && item.type === 'model' && item.display_name);
+  let apiFormat;
+  if (looksAnthropic) apiFormat = 'anthropic';
+  else {
+    let status = null;
+    try {
+      const probe = await fetchImpl(working + '/responses', {
+        method: 'POST', headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + key },
+        body: '{}', signal: AbortSignal.timeout(10000) });
+      status = probe.status;
+    } catch { status = null; }
+    apiFormat = status != null && ![404, 405, 501].includes(status) ? 'openai-responses' : 'openai';
+  }
+  return { baseUrl: working, apiFormat, name: hostName(working) };
+}
+
+// Default provider name: hostname without api./www. prefixes.
+function hostName(base) {
+  let host;
+  try { host = new URL(base).hostname; } catch { host = String(base); }
+  return host.replace(/^(api|www)\./, '') || host;
+}
+
+// Appends " 2", " 3"… when another provider already uses the name.
+function uniqueName(wanted, config, excludeId) {
+  const taken = new Set((config.providers || []).filter(p => p.id !== excludeId).map(p => p.name));
+  if (!taken.has(wanted)) return wanted;
+  for (let i = 2; ; i++) if (!taken.has(wanted + ' ' + i)) return wanted + ' ' + i;
+}
+
+// Merges a fresh /models listing into provider.models: new entries start
+// disabled, existing keep their flag; entries absent upstream are dropped
+// when disabled, otherwise kept and flagged meta.missing.
+function mergeDiscovered(provider, items, index) {
+  const previous = new Map((provider.models || []).map(model => [model.id, model]));
+  const next = [];
+  const seen = new Set();
+  for (const item of items) {
+    const merged = mergeModel(provider, item, index);
+    const existing = previous.get(item.id);
+    seen.add(item.id);
+    next.push(existing ? { ...merged, enabled: existing.enabled !== false }
+      : { ...merged, enabled: false });
+  }
+  for (const existing of provider.models || []) {
+    if (seen.has(existing.id)) continue;
+    if (existing.enabled === false) continue;
+    next.push({ ...existing, meta: { ...(existing.meta || {}), missing: true } });
+  }
+  provider.models = next;
+}
+
+// Rename / override apiFormat / rotate the key. Undefined fields stay.
+function updateProvider(config, payload) {
+  const provider = providerAt(config, payload.id);
+  if (payload.name !== undefined) {
+    const name = text(payload.name, '供应商名称', 80);
+    const previous = provider.name;
+    provider.name = name;
+    if (name !== previous) for (const model of provider.models || []) {
+      if (model.label && model.label.startsWith(previous + ' · ')) model.label = name + model.label.slice(previous.length);
+    }
+  }
+  if (payload.apiFormat !== undefined) {
+    if (!['openai-responses', 'openai', 'anthropic'].includes(payload.apiFormat)) fail('请选择 API 类型。');
+    provider.apiFormat = payload.apiFormat;
+  }
+  if (payload.apiKey !== undefined) {
+    if (typeof payload.apiKey !== 'string' || payload.apiKey.length > 8192 || /[\r\n]/.test(payload.apiKey)) fail('API Key 无效。');
+    const key = payload.apiKey.trim();
+    if (key) provider.apiKey = key;
+  }
+}
+
+// Bulk show/hide of provider models. Returns how many known ids were applied.
+function setModelsEnabled(config, payload) {
+  const provider = providerAt(config, payload.providerId);
+  if (!Array.isArray(payload.modelIds) || payload.modelIds.length > 2000
+    || payload.modelIds.some(id => typeof id !== 'string')) fail('模型列表无效。');
+  const enabled = boolean(payload.enabled, '启用状态');
+  const wanted = new Set(payload.modelIds);
+  let applied = 0;
+  for (const model of provider.models || []) {
+    if (wanted.has(model.id)) { model.enabled = enabled; applied++; }
+  }
+  return applied;
+}
+
 module.exports = { SettingsInputError, text, baseUrl, boolean, providerAt, mergeModel, signature,
   setEnabled, saveProvider, deleteProvider, setProviderEnabled, setModelEnabled, removeModel,
-  discoverModels, importView, importModels, refreshMeta };
+  discoverModels, importView, importModels, refreshMeta,
+  probeProvider, hostName, uniqueName, mergeDiscovered, updateProvider, setModelsEnabled };

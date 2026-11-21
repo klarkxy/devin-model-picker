@@ -152,13 +152,22 @@ function safeBaseUrl(value) {
   } catch { return String(value || '').split('?')[0]; }
 }
 
-// GET /picker/providers — never includes apiKey.
-function providerList(config) {
-  return { providers: (Array.isArray(config.providers) ? config.providers : []).map(provider => ({
+// Per-provider public view — never includes apiKey.
+function providerView(provider) {
+  return {
     id: provider.id, name: provider.name, baseUrl: safeBaseUrl(provider.baseUrl),
     apiFormat: provider.apiFormat, keyConfigured: !!provider.apiKey,
-    models: (provider.models || []).map(model => ({ id: model.id, label: model.label || model.id })),
-  })) };
+    enabled: provider.enabled !== false,
+    models: (provider.models || []).map(model => ({ id: model.id, label: model.label || model.id,
+      enabled: model.enabled !== false, contextWindow: model.contextWindow,
+      efforts: model.efforts, supportsImages: model.supportsImages !== false,
+      missing: model.meta?.missing === true })),
+  };
+}
+
+// GET /picker/providers — never includes apiKey.
+function providerList(config) {
+  return { providers: (Array.isArray(config.providers) ? config.providers : []).map(providerView) };
 }
 
 function ensureProviders(config) { if (!Array.isArray(config.providers)) config.providers = []; }
@@ -210,6 +219,60 @@ const PROVIDER_POSTS = new Map([
     ops.removeModel(config, body || {});
     ctx.writeConfig(ctx.configFile, config);
     return { status: 200, body: { ok: true } };
+  }],
+  // One-call connect: probe the endpoint, create/update the provider, then
+  // fetch + merge the full model list (all recorded, disabled by default).
+  ['/picker/providers/connect', async (body, ctx) => {
+    const config = ctx.config;
+    ensureProviders(config);
+    const probed = await ops.probeProvider({ baseUrl: body?.baseUrl, apiKey: body?.apiKey, fetchImpl: ctx.fetchImpl || fetch });
+    let provider;
+    if (body?.id) {
+      provider = ops.providerAt(config, body.id);
+      Object.assign(provider, { baseUrl: probed.baseUrl, apiFormat: probed.apiFormat,
+        apiKey: typeof body.apiKey === 'string' && body.apiKey.trim() ? body.apiKey.trim() : provider.apiKey });
+    } else {
+      provider = { id: 'provider-' + crypto.randomUUID(), name: ops.uniqueName(probed.name, config),
+        baseUrl: probed.baseUrl, apiFormat: probed.apiFormat, apiKey: String(body?.apiKey || '').trim(),
+        enabled: true, models: [] };
+      config.providers.push(provider);
+    }
+    const index = await ctx.modelsDevIndex?.();
+    let items;
+    try { items = await ctx.discover(provider); }
+    catch { return { status: 502, body: { error: 'discover_failed', message: '获取模型失败，请检查接口配置和连接状态。' } }; }
+    ops.mergeDiscovered(provider, items, index);
+    ctx.writeConfig(ctx.configFile, config);
+    return { status: 200, body: { provider: providerView(provider) } };
+  }],
+  // Re-fetch + merge without re-probing.
+  ['/picker/providers/refresh', async (body, ctx) => {
+    const config = ctx.config;
+    ensureProviders(config);
+    const provider = ops.providerAt(config, body?.id);
+    const index = await ctx.modelsDevIndex?.();
+    let items;
+    try { items = await ctx.discover(provider); }
+    catch { return { status: 502, body: { error: 'discover_failed', message: '获取模型失败，请检查接口配置和连接状态。' } }; }
+    ops.mergeDiscovered(provider, items, index);
+    ctx.writeConfig(ctx.configFile, config);
+    return { status: 200, body: { provider: providerView(provider) } };
+  }],
+  // Rename / override format / rotate key.
+  ['/picker/providers/update', async (body, ctx) => {
+    const config = ctx.config;
+    ensureProviders(config);
+    ops.updateProvider(config, body || {});
+    ctx.writeConfig(ctx.configFile, config);
+    return { status: 200, body: { provider: providerView(ops.providerAt(config, body.id)) } };
+  }],
+  // Bulk show/hide of provider models.
+  ['/picker/models/enabled', async (body, ctx) => {
+    const config = ctx.config;
+    ensureProviders(config);
+    const applied = ops.setModelsEnabled(config, body || {});
+    ctx.writeConfig(ctx.configFile, config);
+    return { status: 200, body: { ok: true, applied } };
   }],
 ]);
 

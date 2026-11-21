@@ -170,7 +170,13 @@ test('/picker/providers lists providers, strips baseUrl userinfo/query, never le
   assert.equal(p1.baseUrl, 'https://p.invalid/v1', 'userinfo/query/hash stripped');
   assert.equal(p1.keyConfigured, true);
   assert.equal(p2key(body), false, 'unconfigured key reported');
-  assert.deepEqual(p1.models, [{ id: 'm1', label: 'M1' }]);
+  assert.equal(p1.models.length, 1);
+  const m1 = p1.models[0];
+  assert.equal(m1.id, 'm1');
+  assert.equal(m1.label, 'M1');
+  assert.equal(m1.enabled, true);
+  assert.equal(m1.supportsImages, true);
+  assert.equal(m1.missing, false);
   const raw = JSON.stringify(body);
   assert.ok(!raw.includes('fixture-secret') && !raw.includes('apiKey') && !raw.includes('user:pass'), 'no secrets');
 });
@@ -260,4 +266,106 @@ test('discover→import flow: pending token validates and provider edits invalid
   assert.equal(failed.status, 502);
   assert.equal(failed.body.error, 'discover_failed');
   assert.ok(!JSON.stringify(failed.body).includes('sk-x'), 'errors never echo the key');
+});
+
+test('/picker/providers/connect probes, stores all models disabled, returns a clean view', async t => {
+  const { handlePickerRequest } = require('../src/picker-api.cjs');
+  const config = { providers: [{ id: 'old', name: 'gw.example.com', baseUrl: 'https://old.invalid',
+    apiFormat: 'openai', apiKey: 'sk-old', models: [] }] };
+  const calls = [];
+  const ctx = { config, configFile: '/dev/null', writeConfig: (file, next) => { Object.assign(config, next); },
+    modelsDevIndex: async () => null,
+    discover: async () => [{ id: 'm1' }, { id: 'm2', label: 'M Two' }],
+    fetchImpl: async (url, options = {}) => {
+      calls.push(String(url));
+      if (String(url).endsWith('/models')) return { status: 200, ok: true, json: async () => ({ data: [{ id: 'm1' }] }) };
+      return { status: 404, ok: false, json: async () => ({}) };
+    } };
+  const res = fakeResponse();
+  await handlePickerRequest(fakeRequest({ baseUrl: 'https://gw.example.com', apiKey: 'sk-new' }), res, '/picker/providers/connect', ctx);
+  assert.equal(res.status, 200);
+  const provider = res.body.provider;
+  assert.equal(provider.name, 'gw.example.com 2', 'name deduped against existing provider');
+  assert.equal(provider.apiFormat, 'openai');
+  assert.equal(provider.baseUrl, 'https://gw.example.com/v1', 'probed v1 base stored');
+  assert.ok(!('apiKey' in provider));
+  assert.ok(calls[0].endsWith('/v1/models'));
+  // All fetched models recorded, none enabled.
+  assert.deepEqual(provider.models.map(m => [m.id, m.enabled]), [['m1', false], ['m2', false]]);
+  const stored = config.providers.at(-1);
+  assert.equal(stored.apiKey, 'sk-new', 'key stored in config');
+  assert.equal(stored.models.length, 2);
+  assert.equal(stored.models[0].enabled, false);
+  assert.ok(!JSON.stringify(res.body).includes('sk-new'), 'key never echoed');
+});
+
+test('/picker/providers/connect with id re-probes and preserves enabled flags + missing', async t => {
+  const { handlePickerRequest } = require('../src/picker-api.cjs');
+  const config = { providers: [{ id: 'p1', name: 'P', baseUrl: 'https://p.invalid/v1',
+    apiFormat: 'openai', apiKey: 'sk-1', models: [
+      { id: 'a', label: 'P · a', enabled: true },
+      { id: 'b', label: 'P · b', enabled: false },
+      { id: 'gone-on', label: 'P · gone-on', enabled: true },
+      { id: 'gone-off', label: 'P · gone-off', enabled: false },
+    ] }] };
+  const ctx = { config, configFile: '/dev/null', writeConfig: (file, next) => { Object.assign(config, next); },
+    modelsDevIndex: async () => null,
+    discover: async () => [{ id: 'a' }, { id: 'b' }, { id: 'new-m' }],
+    fetchImpl: async (url) => String(url).endsWith('/models')
+      ? { status: 200, ok: true, json: async () => ({ data: [] }) }
+      : { status: 404, ok: false, json: async () => ({}) } };
+  const res = fakeResponse();
+  await handlePickerRequest(fakeRequest({ id: 'p1', baseUrl: 'https://p.invalid', apiKey: 'sk-2' }), res, '/picker/providers/connect', ctx);
+  assert.equal(res.status, 200);
+  const byId = new Map(res.body.provider.models.map(m => [m.id, m]));
+  assert.equal(byId.get('a').enabled, true);
+  assert.equal(byId.get('b').enabled, false);
+  assert.equal(byId.get('new-m').enabled, false);
+  assert.equal(byId.get('gone-on').missing, true);
+  assert.ok(!byId.has('gone-off'));
+  assert.equal(config.providers[0].apiKey, 'sk-2');
+  assert.equal(config.providers[0].baseUrl, 'https://p.invalid/v1');
+});
+
+test('/picker/providers/refresh merges without probing; update renames; enabled bulk-toggles', async t => {
+  const { handlePickerRequest } = require('../src/picker-api.cjs');
+  const config = { providers: [{ id: 'p1', name: 'P', baseUrl: 'https://p.invalid/v1',
+    apiFormat: 'openai', apiKey: 'sk-1', models: [
+      { id: 'a', label: 'P · a', enabled: true }, { id: 'gone', label: 'P · gone', enabled: false }] }] };
+  const ctx = { config, configFile: '/dev/null', writeConfig: (file, next) => { Object.assign(config, next); },
+    modelsDevIndex: async () => null,
+    discover: async () => [{ id: 'a' }, { id: 'fresh' }],
+    fetchImpl: async () => { throw new Error('must not fetch'); } };
+  const call = async (path, body) => { const res = fakeResponse(); await handlePickerRequest(fakeRequest(body), res, path, ctx); return res; };
+  const ref = await call('/picker/providers/refresh', { id: 'p1' });
+  assert.equal(ref.status, 200);
+  const byId = new Map(ref.body.provider.models.map(m => [m.id, m]));
+  assert.equal(byId.get('fresh').enabled, false);
+  assert.ok(!byId.has('gone'), 'disabled missing model dropped on refresh');
+  const upd = await call('/picker/providers/update', { id: 'p1', name: 'Renamed', apiFormat: 'anthropic' });
+  assert.equal(upd.status, 200);
+  assert.equal(config.providers[0].name, 'Renamed');
+  assert.equal(config.providers[0].apiFormat, 'anthropic');
+  assert.equal(config.providers[0].apiKey, 'sk-1');
+  const badUpd = await call('/picker/providers/update', { id: 'p1', apiFormat: 'weird' });
+  assert.equal(badUpd.status, 400);
+  const en = await call('/picker/models/enabled', { providerId: 'p1', modelIds: ['a', 'fresh'], enabled: false });
+  assert.equal(en.status, 200);
+  assert.equal(en.body.applied, 2);
+  assert.equal(config.providers[0].models[0].enabled, false);
+  const badEn = await call('/picker/models/enabled', { providerId: 'ghost', modelIds: ['a'], enabled: true });
+  assert.equal(badEn.status, 400);
+});
+
+test('/picker/providers/connect upstream probe failure → 400 with Chinese message', async t => {
+  const { handlePickerRequest } = require('../src/picker-api.cjs');
+  const config = { providers: [] };
+  const ctx = { config, configFile: '/dev/null', writeConfig: () => {},
+    modelsDevIndex: async () => null, discover: async () => [],
+    fetchImpl: async () => { throw new Error('ECONNREFUSED'); } };
+  const res = fakeResponse();
+  await handlePickerRequest(fakeRequest({ baseUrl: 'https://dead.invalid', apiKey: 'k' }), res, '/picker/providers/connect', ctx);
+  assert.equal(res.status, 400);
+  assert.match(res.body.message, /无法连接/);
+  assert.equal(config.providers.length, 0, 'nothing persisted');
 });
