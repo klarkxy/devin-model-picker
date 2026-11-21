@@ -5,11 +5,15 @@
 <title>devin-model-picker real harness</title>
 <style>
   body { margin:0; font:13px/1.5 -apple-system,"Segoe UI",sans-serif; }
-  body.dmp-dark { background:#16181d; color:#e7e9ec; }
-  body.dmp-light { background:#f4f5f7; color:#1f2329; }
+  body.dmp-dark { background:rgb(20,20,20); color:#e7e9ec; }
+  body.dmp-light { background:rgb(244,245,247); color:#1f2329; }
+  /* Real Devin chain: translucent overlay over the dark workbench background —
+     alpha < 0.5 must not count for luminance. */
   #composer { position:fixed; left:5%; right:5%; bottom:28px; padding:14px 16px;
+    background:rgba(255,255,255,.05);
     border:1px solid #8884; border-radius:12px; display:flex; align-items:center; gap:10px; }
   #topbar { position:fixed; left:5%; right:5%; top:52px; padding:10px 14px;
+    background:rgba(255,255,255,.05);
     border:1px solid #8884; border-radius:12px; display:flex; align-items:center; gap:10px; }
   button[aria-haspopup="menu"] { border:1px solid #8886; background:transparent; color:inherit;
     border-radius:8px; padding:5px 12px; font-size:12px; cursor:pointer; }

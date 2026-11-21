@@ -187,6 +187,35 @@ function matchVariant(family, effortOrder, toggles) {
   return best;
 }
 
+// Exact variant for an effort order with every family toggle matching.
+function exactVariant(family, effortOrder, toggles) {
+  return family.variants.find(variant => variant.effortOrder === effortOrder && !variant.disabled
+    && (family.toggles || []).every(key => (variant.toggles?.[key] || 0) === (toggles?.[key] || 0))) || null;
+}
+
+// Card-level switches (Fast, 1M, ...) rendered once in the card header. A
+// switch is disabled when flipping it has no exact variant at the current effort.
+function toggleSwitches(family, cardState, disabled, onFlip) {
+  const row = el('span', 'dmp-togs');
+  for (const key of family.toggles || []) {
+    const on = (cardState.toggles[key] || 0) !== 0;
+    const next = { ...cardState.toggles, [key]: on ? 0 : 1 };
+    const pill = el('button', 'dmp-tog' + (on ? ' dmp-on' : ''), toggleLabel(key));
+    pill.setAttribute('aria-pressed', String(on));
+    const target = cardState.effortOrder != null ? exactVariant(family, cardState.effortOrder, next) : null;
+    if (disabled || (cardState.effortOrder != null && !target)) {
+      pill.disabled = true;
+      if (!disabled) pill.title = '当前强度没有' + toggleLabel(key) + '版本';
+    } else pill.addEventListener('click', event => {
+      event.stopPropagation();
+      cardState.toggles = next;
+      onFlip(target);
+    });
+    row.appendChild(pill);
+  }
+  return row;
+}
+
 // Groups filtered visibleModelConfigs into merged family cards.
 // Each card: { cardKey, name, version, variant, families: [{ providerName,
 // vendor, free, variants: [{ uid, label, effort, effortText, disabled,
@@ -349,7 +378,7 @@ const LS_KEY = 'devin-model-picker:v1';
 
 const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, baseLabel,
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
-  underlyingKey, matchVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
+  underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
 if (typeof module === 'object' && module.exports) { module.exports = exportsMap; return; }
 
@@ -405,7 +434,7 @@ const CSS = `
 .dmp-eff button:hover{color:var(--dmp-fg);border-color:var(--dmp-muted)}
 .dmp-eff button.dmp-on{background:var(--dmp-sel);border-color:var(--dmp-sel);color:#fff}
 .dmp-eff button:disabled{opacity:.4;cursor:default}
-.dmp-togs{display:flex;justify-content:flex-end;gap:4px;margin:2px 0 4px}
+.dmp-togs{display:flex;gap:3px}
 .dmp-tog{border:1px solid var(--dmp-border);border-radius:999px;background:var(--dmp-chip);
  color:var(--dmp-muted);font-size:9px;padding:1px 7px;cursor:pointer}
 .dmp-tog.dmp-on{background:var(--dmp-sel);border-color:var(--dmp-sel);color:#fff}
@@ -515,7 +544,8 @@ function ensureStyle() {
   document.head.appendChild(styleNode);
 }
 
-// Theme: relative luminance of the first non-transparent ancestor background
+// Theme: relative luminance of the first mostly-opaque ancestor background
+// (translucent overlays like rgba(255,255,255,.05) say nothing about the theme)
 // walking up from the trigger (Devin's workbench body has no .dark class).
 function isDark(anchor) {
   try {
@@ -523,7 +553,7 @@ function isDark(anchor) {
     while (node) {
       const bg = getComputedStyle(node).backgroundColor;
       const match = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+))?/.exec(bg || '');
-      if (match && (match[4] === undefined || Number(match[4]) !== 0)) {
+      if (match && (match[4] === undefined || Number(match[4]) >= 0.5)) {
         const lum = (0.2126 * Number(match[1]) + 0.7152 * Number(match[2]) + 0.0722 * Number(match[3])) / 255;
         return lum < 0.5;
       }
@@ -594,6 +624,9 @@ function buildCard(card, index, located) {
   const chip = el('button', 'dmp-prov', family.providerName || 'Devin');
   chip.title = card.families.length > 1 ? '切换供应商' : '';
   top.appendChild(chip);
+  if ((family.toggles || []).length) top.appendChild(toggleSwitches(family, cardState, cardDisabled, target => {
+    if (live && target) selectModel(located, target.uid); else rerenderGrid();
+  }));
   node.appendChild(top);
 
   const nameRow = el('div');
@@ -607,24 +640,6 @@ function buildCard(card, index, located) {
 
   node.appendChild(el('div', 'dmp-sub', (family.familyLabel || card.name) + ' · ' + (family.providerName || 'Devin')));
 
-  if ((family.toggles || []).length) {
-    const row = el('div', 'dmp-togs');
-    for (const key of family.toggles) {
-      const on = (cardState.toggles[key] || 0) !== 0;
-      const pill = el('button', 'dmp-tog' + (on ? ' dmp-on' : ''), toggleLabel(key));
-      pill.addEventListener('click', event => {
-        event.stopPropagation();
-        const next = { ...cardState.toggles, [key]: on ? 0 : 1 };
-        cardState.toggles = next;
-        if (live) {
-          const target = matchVariant(family, cardState.effortOrder, next);
-          if (target) selectModel(located, target.uid);
-        } else rerenderGrid();
-      });
-      row.appendChild(pill);
-    }
-    node.appendChild(row);
-  }
 
   if (family.cells.length) {
     const eff = el('div', 'dmp-eff');
@@ -711,27 +726,24 @@ function buildFusionCard(card, index, located, state) {
     });
   }
   const cardState = panelState.cardStates.get(fkey);
+  const held = card.variants.find(variant => selectedRefs.includes(variant.ref.kind + ':' + variant.ref.uid));
+  if (held) {
+    cardState.effortOrder = held.effortOrder ?? cardState.effortOrder;
+    for (const key of card.toggles || []) cardState.toggles[key] = held.toggles?.[key] ?? 0;
+  }
   const fill = variant => {
     if (!variant || blocked) return;
     slots[panelState.activeSlot] = variant.ref;
     if (panelState.activeSlot === 'lead' && !slots.sidekick) panelState.activeSlot = 'sidekick';
     rerenderGrid();
   };
-  if ((card.toggles || []).length) {
-    const row = el('div', 'dmp-togs');
-    for (const key of card.toggles) {
-      const on = (cardState.toggles[key] || 0) !== 0;
-      const pill = el('button', 'dmp-tog' + (on ? ' dmp-on' : ''), toggleLabel(key));
-      if (blocked) pill.disabled = true;
-      else pill.addEventListener('click', event => {
-        event.stopPropagation();
-        cardState.toggles = { ...cardState.toggles, [key]: on ? 0 : 1 };
-        rerenderGrid();
-      });
-      row.appendChild(pill);
+  if ((card.toggles || []).length) top.appendChild(toggleSwitches(card, cardState, blocked, target => {
+    // A slot already holding this card follows the switch.
+    for (const slot of ['lead', 'sidekick']) {
+      if (target && slots[slot] && card.variants.some(variant => variant.ref.kind === slots[slot].kind && variant.ref.uid === slots[slot].uid)) slots[slot] = target.ref;
     }
-    node.appendChild(row);
-  }
+    rerenderGrid();
+  }));
   if (card.cells.length) {
     const eff = el('div', 'dmp-eff');
     for (const cell of card.cells) {

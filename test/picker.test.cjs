@@ -151,6 +151,10 @@ test('groupCards aggregates real Devin families: deduped cells + toggle switches
   assert.equal(opus.familyLabel, 'Claude Opus 5.5');
   assert.equal(picker.matchVariant(opus, 1, { 'Fast Mode': 1 }).uid, 'claude-opus-5-5-medium-fast');
   assert.equal(picker.matchVariant(opus, 1, { 'Fast Mode': 0 }).uid, 'claude-opus-5-5-medium');
+  assert.equal(picker.exactVariant(opus, 4, { 'Fast Mode': 1 }).uid, 'claude-opus-5-5-max-fast');
+  const noFast = { ...opus, variants: opus.variants.filter(variant => variant.uid !== 'claude-opus-5-5-max-fast') };
+  assert.equal(picker.exactVariant(noFast, 4, { 'Fast Mode': 1 }), null,
+    'card-level Fast is unavailable when the current effort has no fast variant');
 
   const sol = familyOf('sol|5.6|');
   assert.deepEqual(sol.cells.map(cell => cell.label), ['Off', 'L', 'M', 'H', 'xH', 'Max']);
