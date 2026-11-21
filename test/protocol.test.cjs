@@ -1,0 +1,557 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const http = require('node:http');
+const { once } = require('node:events');
+const zlib = require('node:zlib');
+const wire = require('../src/protocol/wire.cjs');
+const { parseChat } = require('../src/protocol/chat.cjs');
+const { serveChat, buildRequestBody } = require('../src/protocol/responses.cjs');
+const { s, v, m, str, num, fields } = wire;
+
+function nativeMessage(source, text, extra = []) {
+  return m(3, Buffer.concat([v(2, source), s(3, text), ...extra]));
+}
+function nativeRequest() {
+  const args = '{ "prompt": "keep whitespace", "count": "01" }';
+  return Buffer.concat([
+    s(2, '  Original\n\nsystem instructions  '), s(21, 'local-cpa-lead'), v(6, 9901),
+    nativeMessage(1, 'User message', [m(10, Buffer.concat([s(1, 'aGVsbG8='), s(2, 'image/png'), s(3, 'Image caption')]))]),
+    nativeMessage(2, 'Assistant before tool', [m(6, Buffer.concat([s(1, 'call:1'), s(2, 'sidekick'), s(3, args)]))]),
+    nativeMessage(4, 'Tool output', [s(7, 'call:1'), v(9, 1)]),
+    nativeMessage(5, 'System message in the middle'),
+    nativeMessage(1, 'User after tool'),
+    ...['sidekick', 'shell_command', 'mcp__service__tool'].map(name => m(10, Buffer.concat([s(1, name), s(2, 'Original description'), s(3, '{"type":"object","properties":{"cmd":{"type":"string"}},"additionalProperties":false}')]))),
+    m(12, Buffer.concat([s(1, 'tool'), s(2, 'sidekick')])),
+  ]);
+}
+
+function unpack(buffer) {
+  const messages = [];
+  let eos = 0;
+  for (let offset = 0; offset < buffer.length;) {
+    const flags = buffer[offset];
+    const length = buffer.readUInt32BE(offset + 1);
+    let data = buffer.subarray(offset + 5, offset + 5 + length);
+    offset += 5 + length;
+    if (flags & 1) data = zlib.gunzipSync(data);
+    if (flags & 2) { eos++; assert.deepEqual(JSON.parse(data), {}); }
+    else messages.push(data);
+  }
+  return { messages, eos };
+}
+
+async function server(handler, t) {
+  const instance = http.createServer(handler);
+  instance.listen(0, '127.0.0.1');
+  await once(instance, 'listening');
+  t.after(() => new Promise(resolve => { instance.closeAllConnections(); instance.close(resolve); }));
+  return { instance, url: `http://127.0.0.1:${instance.address().port}` };
+}
+
+async function bridge(t, upstreamHandler, apiFormat = 'openai-responses', timeouts = {}, onMetrics = () => {}) {
+  const requests = [];
+  const logs = [];
+  const upstream = await server(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    requests.push({ url: req.url, body: JSON.parse(Buffer.concat(chunks)), auth: req.headers.authorization });
+    await upstreamHandler(req, res);
+  }, t);
+  const proxy = await server((req, res) => {
+    serveChat({ request: parseChat(nativeRequest()), route: { model: 'test-model', uid: 'local-cpa-lead', effort: 'high' }, provider: { baseUrl: `${upstream.url}/v1`, apiKey: 'fake-provider-secret', apiFormat }, res, log: event => logs.push(event), timeouts, onMetrics });
+  }, t);
+  return { ...proxy, requests, logs, upstream };
+}
+
+function event(value) { return `data: ${JSON.stringify(value)}\r\n\r\n`; }
+
+test('usage after Chat finish_reason is not duplicated into output', async t => {
+  const metrics = [];
+  const proxy = await bridge(t, async (_, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ choices: [{ delta: { content: 'hello' }, finish_reason: 'stop' }] }));
+    res.write(event({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 0 } } }));
+    res.end('data: [DONE]\n\n');
+  }, 'openai', {}, value => metrics.push(value));
+  const response = await fetch(proxy.url);
+  const output = unpack(Buffer.from(await response.arrayBuffer()));
+  assert.equal(output.messages.map(m => str(m, 3)).join(''), 'hello');
+  assert.equal(metrics.length, 1, 'onMetrics still fires exactly once');
+  assert.deepEqual(proxy.requests[0].body.stream_options, { include_usage: true });
+});
+
+test('protobuf retains unknown raw fields and uint64 without rounding', () => {
+  const input = Buffer.concat([s(3, '模型'), v(911, 18446744073709551615n), m(300, Buffer.from([1, 2, 3]))]);
+  const parsed = wire.parseFields(input);
+  assert.equal(str(input, 3), '模型');
+  assert.equal(num(input, 911), 18446744073709551615n);
+  assert.deepEqual(Buffer.concat(parsed.map(field => field.raw)), input);
+  assert.deepEqual(parsed.map(field => [field.number, field.wire]), [[3, 2], [911, 0], [300, 2]]);
+});
+
+test('protobuf rejects malformed lengths, tags and overflowing varints', () => {
+  for (const input of [[0], [10, 4, 65], [9, 1, 2], [13, 1], [8, ...Array(10).fill(128)], [8, ...Array(9).fill(255), 2], [11]]) {
+    assert.throws(() => wire.parseFields(Buffer.from(input)));
+  }
+});
+
+test('Connect protobuf and JSON preserve framing and both gzip layers', () => {
+  for (const json of [false, true]) for (const gzip of [false, true]) for (const compressed of [false, true]) {
+    const data = json ? { unicode: '中文', value: 42 } : s(1, '中文');
+    const format = { framed: true, json, gzip, compressed, type: json ? 'application/connect+json' : 'application/connect+proto' };
+    const encoded = wire.encode(data, format);
+    const decoded = wire.decode(encoded, { 'content-type': format.type, ...(gzip ? { 'content-encoding': 'gzip' } : {}) });
+    assert.deepEqual(decoded.data, data);
+    assert.equal(decoded.framed, true);
+    assert.equal(decoded.compressed, compressed);
+    assert.deepEqual(wire.encode(decoded.data, decoded), encoded);
+  }
+  assert.throws(() => wire.decode(Buffer.from([0, 0, 0, 0, 10, 1]), { 'content-type': 'application/connect+proto' }));
+  assert.throws(() => wire.decode(Buffer.concat([wire.frame(s(1, 'a')), wire.frame(s(1, 'b'))]), { 'content-type': 'application/connect+proto' }));
+});
+
+test('native parser preserves arbitrary tools, arguments, system bytes and message order', () => {
+  const request = parseChat(nativeRequest());
+  assert.equal(request.systemPrompt, '  Original\n\nsystem instructions  ');
+  assert.equal(request.modelUid, 'local-cpa-lead');
+  assert.equal(request.modelEnum, 9901);
+  assert.deepEqual(request.tools.map(tool => tool.name), ['sidekick', 'shell_command', 'mcp__service__tool']);
+  assert.equal(request.messages[1].toolCalls[0].arguments, '{ "prompt": "keep whitespace", "count": "01" }');
+  assert.equal(request.messages[1].toolCalls[0].id, 'call:1');
+  assert.equal(request.messages[2].toolResultIsError, true);
+  assert.deepEqual(request.messages.map(message => message.role), ['user', 'assistant', 'tool', 'system', 'user']);
+  assert.equal(request.tools[1].parameters.properties.cmd.type, 'string');
+});
+
+for (const snake of [false, true]) test(`native ${snake ? 'snake_case' : 'camelCase'} JSON schema matches protobuf history and tools`, () => {
+  const key = (camel, underscored) => snake ? underscored : camel;
+  const native = parseChat(nativeRequest());
+  const data = {
+    [key('chatModelUid', 'chat_model_uid')]: native.modelUid,
+    [key('internalChatModel', 'internal_chat_model')]: native.modelEnum,
+    prompt: native.systemPrompt,
+    [key('chatMessagePrompts', 'chat_message_prompts')]: native.messages.map(message => ({
+      [key('messageId', 'message_id')]: message.messageId,
+      source: message.source,
+      prompt: message.content,
+      [key('toolCalls', 'tool_calls')]: message.toolCalls.map(call => ({ id: call.id, name: call.name, [key('argumentsJson', 'arguments_json')]: call.arguments })),
+      [key('toolCallId', 'tool_call_id')]: message.toolCallId,
+      [key('toolResultIsError', 'tool_result_is_error')]: message.toolResultIsError,
+      images: message.images.map(image => ({ [key('base64Data', 'base64_data')]: image.base64, [key('mimeType', 'mime_type')]: image.mimeType, caption: image.caption })),
+      thinking: message.thinking, signature: message.signature,
+    })),
+    tools: native.tools.map(tool => ({ name: tool.name, description: tool.description, [key('jsonSchemaString', 'json_schema_string')]: JSON.stringify(tool.parameters) })),
+    [key('toolChoice', 'tool_choice')]: { [key('toolName', 'tool_name')]: 'sidekick' },
+  };
+  const parsed = parseChat(data);
+  assert.deepEqual(parsed, native);
+  assert.deepEqual(buildRequestBody(parsed, { model: 'chosen-model' }, { apiFormat: 'responses' }), buildRequestBody(native, { model: 'chosen-model' }, { apiFormat: 'responses' }));
+  data[key('toolChoice', 'tool_choice')] = { [key('optionName', 'option_name')]: 'any' };
+  assert.equal(buildRequestBody(parseChat(data), { model: 'chosen-model' }, { apiFormat: 'openai' }).tool_choice, 'required');
+});
+
+test('Responses and Chat requests preserve history, pictures and exact tool definitions', () => {
+  const request = parseChat(nativeRequest());
+  for (const effort of ['xhigh', 'max']) {
+    for (const apiFormat of ['openai-responses', 'chat-completions']) {
+      const body = buildRequestBody(request, { model: 'chosen-model', effort }, { apiFormat });
+      assert.equal(body.model, 'chosen-model');
+      const chat = apiFormat === 'chat-completions';
+      const messages = chat ? body.messages : body.input;
+      assert.equal(messages[0].content, request.systemPrompt);
+      assert.equal(messages[1].content[1].type, chat ? 'image_url' : 'input_image');
+      assert.equal(messages.at(-2).content, 'System message in the middle');
+      assert.equal(messages.at(-1).content, 'User after tool');
+      assert.deepEqual(body.tools.map(tool => (tool.function || tool).name), request.tools.map(tool => tool.name));
+      assert.deepEqual((body.tools[1].function || body.tools[1]).parameters, request.tools[1].parameters);
+      if (chat) {
+        assert.equal(messages[2].tool_calls[0].function.arguments, request.messages[1].toolCalls[0].arguments);
+        assert.equal(body.tool_choice.function.name, 'sidekick');
+        assert.equal(body.reasoning_effort, effort);
+      } else {
+        assert.equal(messages[3].type, 'function_call');
+        assert.equal(messages[4].type, 'function_call_output');
+        assert.equal(messages[3].arguments, request.messages[1].toolCalls[0].arguments);
+        assert.equal(body.tool_choice.name, 'sidekick');
+        assert.equal(body.reasoning.effort, effort);
+      }
+    }
+  }
+});
+
+test('openai menu format selects Chat Completions and configured output limit is retained', () => {
+  const request = parseChat(nativeRequest());
+  const chatBody = buildRequestBody(request, { model: 'chosen-model', maxOutputTokens: 8192 }, { apiFormat: 'openai', maxTokens: 4096 });
+  assert.ok(Array.isArray(chatBody.messages));
+  assert.equal(chatBody.input, undefined);
+  assert.equal(chatBody.max_completion_tokens, 8192);
+  const responsesBody = buildRequestBody(request, { model: 'chosen-model', maxOutputTokens: 8192 }, { apiFormat: 'responses' });
+  assert.equal(responsesBody.max_output_tokens, 8192);
+});
+
+test('Responses completes parallel done-only calls and Unicode split across TCP chunks', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const values = [
+      { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '中文✓' },
+      { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', id: 'item-1', call_id: 'call-1', name: 'sidekick' } },
+      { type: 'response.output_item.added', output_index: 2, item: { type: 'function_call', id: 'item-2', call_id: 'call-2', name: 'mcp__service__tool' } },
+      { type: 'response.function_call_arguments.done', item_id: 'item-1', arguments: '{ "prompt": "check" }' },
+      { type: 'response.output_item.done', output_index: 2, item: { type: 'function_call', id: 'item-2', call_id: 'call-2', name: 'mcp__service__tool', arguments: '{"cmd":"run"}' } },
+      { type: 'response.completed', response: { status: 'completed', output: [] } },
+    ];
+    const bytes = Buffer.from(values.map(event).join(''));
+    for (let i = 0; i < bytes.length; i += 7) res.write(bytes.subarray(i, i + 7));
+    res.end();
+  });
+  const response = await fetch(app.url);
+  assert.equal(response.headers.get('content-type'), 'application/connect+proto');
+  const { messages, eos } = unpack(Buffer.from(await response.arrayBuffer()));
+  assert.equal(messages.map(message => str(message, 3)).join(''), '中文✓');
+  const tools = messages.flatMap(message => fields(message, 6)).map(field => ({ name: str(field.value, 2), args: str(field.value, 3) }));
+  assert.deepEqual(tools, [{ name: 'sidekick', args: '{ "prompt": "check" }' }, { name: 'mcp__service__tool', args: '{"cmd":"run"}' }]);
+  assert.equal(num(messages.at(-1), 5), 10);
+  assert.equal(str(messages.at(-1), 23), 'local-cpa-lead');
+  assert.equal(eos, 1);
+  assert.equal(app.requests[0].url, '/v1/responses');
+  assert.equal(app.requests[0].auth, 'Bearer fake-provider-secret');
+  assert.equal(JSON.stringify(app.logs).includes('fake-provider-secret'), false);
+  assert.deepEqual(app.logs[0].toolNames, ['sidekick', 'mcp__service__tool']);
+});
+
+test('Responses completed output alone reconstructs text and exact tool arguments', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(event({ type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Only final text' }] }, { type: 'function_call', call_id: 'call-1', name: 'sidekick', arguments: '{"prompt":"done-only"}' }] } }));
+  });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Only final text');
+  assert.equal(str(result.messages.flatMap(message => fields(message, 6))[0].value, 3), '{"prompt":"done-only"}');
+  assert.equal(num(result.messages.at(-1), 5), 10);
+});
+
+test('Responses delta and completed output do not duplicate tool calls or text', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.output_text.delta', delta: 'A', output_index: 0, content_index: 0 },
+      { type: 'response.output_text.done', text: 'AB', output_index: 0, content_index: 0 },
+      { type: 'response.output_item.added', item: { type: 'function_call', id: 'item', call_id: 'call', name: 'sidekick' }, output_index: 1 },
+      { type: 'response.function_call_arguments.delta', delta: '{"prompt":', item_id: 'item' },
+      { type: 'response.function_call_arguments.delta', delta: '"task"}', output_index: 1 },
+      { type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'AB' }] }, { type: 'function_call', id: 'item', call_id: 'call', name: 'sidekick', arguments: '{"prompt":"task"}' }] } },
+    ].map(event).join(''));
+  });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'AB');
+  assert.equal(result.messages.flatMap(message => fields(message, 6)).length, 1);
+});
+
+test('Responses parallel calls retain output index order when events arrive out of order', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { type: 'response.output_item.done', output_index: 1, item: { type: 'function_call', call_id: 'c2', name: 'shell_command', arguments: '{"cmd":"second"}' } },
+      { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', call_id: 'c1', name: 'sidekick', arguments: '{"prompt":"first"}' } },
+      { type: 'response.completed', response: { status: 'completed', output: [] } },
+    ].map(event).join(''));
+  });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.deepEqual(result.messages.flatMap(message => fields(message, 6)).map(tool => str(tool.value, 2)), ['sidekick', 'shell_command']);
+});
+
+test('explicit caller abort cancels a request before HTTP headers arrive', async t => {
+  let upstreamStarted;
+  const started = new Promise(resolve => { upstreamStarted = resolve; });
+  let upstreamClosed;
+  const closed = new Promise(resolve => { upstreamClosed = resolve; });
+  const upstream = await server((req, res) => { res.on('close', upstreamClosed); upstreamStarted(); }, t);
+  const controller = new AbortController();
+  const logs = [];
+  const proxy = await server((req, res) => {
+    serveChat({ request: parseChat(nativeRequest()), route: { model: 'test-model', uid: 'local-test' }, provider: { baseUrl: `${upstream.url}/v1`, apiKey: 'unused', apiFormat: 'responses' }, res, signal: controller.signal, log: event => logs.push(event) });
+  }, t);
+  const pending = fetch(proxy.url).catch(() => null);
+  await started;
+  controller.abort();
+  assert.equal(await pending, null);
+  await Promise.race([closed, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('Upstream not aborted')), 2000); timer.unref(); })]);
+  assert.equal(logs[0].event, 'chat-aborted');
+});
+
+test('Chat Completions assembles fragmented parallel native tool calls', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { choices: [{ index: 0, delta: { reasoning_content: 'Thinking', tool_calls: [{ index: 0, id: 'c1', function: { name: 'sidekick', arguments: '{"prompt":' } }, { index: 1, id: 'c2', function: { name: 'shell_command', arguments: '{"cmd":' } }] } }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ index: 1, function: { arguments: '"echo ok"}' } }, { index: 0, function: { arguments: '"task"}' } }] }, finish_reason: 'tool_calls' }] },
+    ].map(event).join('') + 'data: [DONE]\n\n');
+  }, 'openai-chat-completions');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(app.requests[0].url, '/v1/chat/completions');
+  assert.equal(result.messages.map(message => str(message, 9)).join(''), 'Thinking');
+  const tools = result.messages.flatMap(message => fields(message, 6));
+  assert.deepEqual(tools.map(tool => [str(tool.value, 2), str(tool.value, 3)]), [['sidekick', '{"prompt":"task"}'], ['shell_command', '{"cmd":"echo ok"}']]);
+  assert.equal(num(result.messages.at(-1), 5), 10);
+});
+
+test('incomplete, malformed and unterminated streams do not execute tools', async t => {
+  for (const ending of ['incomplete', 'invalid-json', 'truncated']) await t.test(ending, async st => {
+    const app = await bridge(st, async (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(event({ type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'c1', name: 'sidekick' } }));
+      res.write(event({ type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"prompt":' }));
+      if (ending === 'incomplete') res.write(event({ type: 'response.incomplete', response: { incomplete_details: { reason: 'max_output_tokens' } } }));
+      if (ending === 'invalid-json') res.write(event({ type: 'response.completed', response: { status: 'completed', output: [] } }));
+      res.end();
+    });
+    const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+    assert.equal(result.messages.flatMap(message => fields(message, 6)).length, 0);
+    assert.equal(num(result.messages.at(-1), 5), ending === 'incomplete' ? 3 : 13);
+  });
+});
+
+test('upstream errors expose HTTP status without body, prompt or credentials', async t => {
+  const app = await bridge(t, async (req, res) => { res.writeHead(429); res.end('fake-provider-secret secret upstream reply with user content'); });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Provider returned HTTP 429.');
+  assert.equal(num(result.messages.at(-1), 5), 13);
+  assert.equal(JSON.stringify(app.logs).includes('secret'), false);
+  assert.equal(JSON.stringify(app.logs).includes('User message'), false);
+});
+
+test('client cancellation aborts active upstream request', async t => {
+  let upstreamClosed;
+  const closed = new Promise(resolve => { upstreamClosed = resolve; });
+  let upstreamStarted;
+  const started = new Promise(resolve => { upstreamStarted = resolve; });
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ type: 'response.output_text.delta', delta: 'Started' }));
+    res.on('close', upstreamClosed);
+    upstreamStarted();
+  });
+  const controller = new AbortController();
+  const response = await fetch(app.url, { signal: controller.signal });
+  await started;
+  await response.body.getReader().read();
+  controller.abort();
+  await Promise.race([closed, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('Upstream not aborted')), 2000); timer.unref(); })]);
+  assert.equal(app.logs.some(log => log.event === 'chat-aborted'), true);
+});
+
+test('provider idle timeout outputs code 13 and target text, cancel does not retry', async t => {
+  let timer;
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ type: 'response.output_text.delta', delta: 'First chunk' }));
+    timer = setTimeout(() => { if (!res.writableEnded) res.end(); }, 2000);
+    res.on('close', () => clearTimeout(timer));
+  }, 'openai-responses', { idleMs: 50, firstResponseMs: 500 });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'First chunkProvider response could not be completed.');
+  assert.equal(num(result.messages.at(-1), 5), 13);
+  assert.ok(app.logs.some(l => l.event === 'chat-error' && l.code === 'upstream_timeout'));
+});
+
+test('finish_reason content_filter maps to stopReason 11', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      { choices: [{ index: 0, delta: { content: 'Blocked content' }, finish_reason: 'content_filter' }] }
+    ].map(event).join('') + 'data: [DONE]\n\n');
+  }, 'openai-chat-completions');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(num(result.messages.at(-1), 5), 11);
+});
+
+test('raw heartbeat keeps stream alive past idle timeout until completion', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(': heartbeat comment\r\n\r\n');
+    await new Promise(r => setTimeout(r, 40));
+    res.write(': heartbeat comment\r\n\r\n');
+    await new Promise(r => setTimeout(r, 40));
+    res.write(event({ type: 'response.output_text.delta', delta: 'Complete after heartbeats' }));
+    res.write(event({ type: 'response.completed', response: { status: 'completed', output: [] } }));
+    res.end();
+  }, 'openai-responses', { idleMs: 60 });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Complete after heartbeats');
+  assert.equal(num(result.messages.at(-1), 5), 2);
+  assert.ok(app.logs.some(l => l.event === 'chat-complete' && l.requestId));
+});
+
+test('response.failed outputs generic target phrase and classified stream error', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ type: 'response.failed', error: { message: 'internal server error' } }));
+    res.end();
+  }, 'openai-responses');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Provider response could not be completed.');
+  assert.equal(num(result.messages.at(-1), 5), 13);
+  assert.ok(app.logs.some(l => l.event === 'chat-error' && l.code === 'upstream_stream_error'));
+});
+
+test('invalid tool call JSON outputs invalid format message', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'c1', name: 'tool' } }));
+    res.write(event({ type: 'response.function_call_arguments.done', output_index: 0, arguments: 'not valid json{' }));
+    res.write(event({ type: 'response.completed', response: { status: 'completed', output: [] } }));
+    res.end();
+  }, 'openai-responses');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Provider response format is invalid.');
+  assert.equal(num(result.messages.at(-1), 5), 13);
+  assert.ok(app.logs.some(l => l.event === 'chat-error' && l.code === 'upstream_invalid_tool'));
+});
+
+test('firstResponse timeout triggers code 13 and upstream_timeout error', async t => {
+  const app = await bridge(t, async (req, res) => {
+    // Hang without sending headers
+    await new Promise(r => setTimeout(r, 200));
+  }, 'openai-responses', { firstResponseMs: 30, idleMs: 500 });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Provider response could not be completed.');
+  assert.equal(num(result.messages.at(-1), 5), 13);
+  assert.ok(app.logs.some(l => l.event === 'chat-error' && l.code === 'upstream_timeout'));
+});
+
+test('malformed non-SSE content-type outputs invalid format message', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('Not SSE content');
+  }, 'openai-responses');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  assert.equal(result.messages.map(message => str(message, 3)).join(''), 'Provider response format is invalid.');
+  assert.equal(num(result.messages.at(-1), 5), 13);
+  assert.ok(app.logs.some(l => l.event === 'chat-error' && l.code === 'upstream_content_type'));
+});
+
+test('Responses forwards native usage field 7 after a valid completed snapshot', async t => {
+  const app = await bridge(t, async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'ok' }));
+    res.end(event({ type: 'response.completed', response: { status: 'completed', output: [], usage: { input_tokens: 21, output_tokens: 7 } } }));
+  });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  const usage = fields(result.messages.at(-2), 7)[0]?.value;
+  assert.ok(usage, 'usage message precedes the stop chunk');
+  assert.equal(num(usage, 2), 21);
+  assert.equal(num(usage, 3), 7);
+  assert.equal(str(usage, 7), str(result.messages.at(-2), 1));
+  assert.equal(str(usage, 9), 'local-cpa-lead');
+  assert.equal(num(result.messages.at(-1), 5), 2);
+  assert.equal(str(result.messages.at(-1), 23), 'local-cpa-lead');
+});
+
+test('Chat forwards usage after finish_reason and accepts a real zero', async t => {
+  const app = await bridge(t, async (_, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }));
+    res.write(event({ choices: [], usage: { prompt_tokens: 0, completion_tokens: 0 } }));
+    res.end('data: [DONE]\n\n');
+  }, 'openai');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  const usage = fields(result.messages.at(-2), 7)[0]?.value;
+  assert.ok(usage, 'a reported zero still emits usage');
+  assert.equal(num(usage, 2), 0);
+  assert.equal(num(usage, 3), 0);
+  assert.equal(num(result.messages.at(-1), 5), 2);
+});
+
+test('usage is suppressed for missing, partial, fractional, negative and oversized snapshots', async t => {
+  const cases = [
+    { prompt_tokens: 5 },
+    { completion_tokens: 5 },
+    { prompt_tokens: 5.5, completion_tokens: 5 },
+    { prompt_tokens: -1, completion_tokens: 5 },
+    { prompt_tokens: Number.MAX_SAFE_INTEGER + 2, completion_tokens: 5 },
+    { prompt_tokens: 5, completion_tokens: Number.MAX_SAFE_INTEGER + 2 }
+  ];
+  for (const usage of cases) {
+    const app = await bridge(t, async (_, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(event({ choices: [{ delta: { content: 'x' }, finish_reason: 'stop' }] }));
+      res.write(event({ choices: [], usage }));
+      res.end('data: [DONE]\n\n');
+    }, 'openai');
+    const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+    assert.equal(result.messages.flatMap(message => fields(message, 7)).length, 0, JSON.stringify(usage));
+    assert.equal(num(result.messages.at(-1), 5), 2, JSON.stringify(usage));
+  }
+});
+
+test('repeated snapshots replace rather than merge and a later invalid snapshot suppresses usage', async t => {
+  const app = await bridge(t, async (_, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ choices: [{ delta: { content: 'a' }, finish_reason: 'stop' }] }));
+    res.write(event({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 40 } }));
+    res.write(event({ choices: [], usage: { prompt_tokens: 11, completion_tokens: 4 } }));
+    res.end('data: [DONE]\n\n');
+  }, 'openai');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  const usages = result.messages.flatMap(message => fields(message, 7));
+  assert.equal(usages.length, 1);
+  assert.equal(num(usages[0].value, 2), 11);
+  assert.equal(num(usages[0].value, 3), 4);
+
+  const partial = await bridge(t, async (_, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ choices: [{ delta: { content: 'a' }, finish_reason: 'stop' }] }));
+    res.write(event({ choices: [], usage: { prompt_tokens: 9, completion_tokens: 3 } }));
+    res.write(event({ choices: [], usage: { prompt_tokens: 5 } }));
+    res.end('data: [DONE]\n\n');
+  }, 'openai');
+  const replaced = unpack(Buffer.from(await (await fetch(partial.url)).arrayBuffer()));
+  assert.equal(replaced.messages.flatMap(message => fields(message, 7)).length, 0);
+  assert.equal(num(replaced.messages.at(-1), 5), 2);
+});
+
+test('stop chunk writes the model uid to actual_model_uid and never to field 20', async t => {
+  const app = await bridge(t, async (_, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(event({ type: 'response.completed', response: { status: 'completed', output: [] } }));
+  });
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  const stop = result.messages.at(-1);
+  assert.equal(str(stop, 23), 'local-cpa-lead');
+  assert.equal(fields(stop, 20).length, 0);
+});
+
+test('an explicitly present malformed usage clears a previous valid snapshot', async t => {
+  const run = async mutate => {
+    const app = await bridge(t, async (_, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(event({ choices: [{ delta: { content: 'a' }, finish_reason: 'stop' }] }));
+      res.write(event({ choices: [], usage: { prompt_tokens: 9, completion_tokens: 3 } }));
+      res.write(event({ choices: [], usage: mutate }));
+      res.end('data: [DONE]\n\n');
+    }, 'openai');
+    return unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  };
+  for (const malformed of [7, 'usage', null]) {
+    const result = await run(malformed);
+    assert.equal(result.messages.flatMap(message => fields(message, 7)).length, 0, JSON.stringify(malformed));
+    assert.equal(num(result.messages.at(-1), 5), 2, JSON.stringify(malformed));
+  }
+});
+
+test('events without a usage property retain the latest valid snapshot', async t => {
+  const app = await bridge(t, async (_, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(event({ choices: [], usage: { prompt_tokens: 13, completion_tokens: 6 } }));
+    res.write(event({ choices: [{ delta: { content: 'a' }, finish_reason: 'stop' }] }));
+    res.write(event({ choices: [] }));
+    res.end('data: [DONE]\n\n');
+  }, 'openai');
+  const result = unpack(Buffer.from(await (await fetch(app.url)).arrayBuffer()));
+  const usages = result.messages.flatMap(message => fields(message, 7));
+  assert.equal(usages.length, 1);
+  assert.equal(num(usages[0].value, 2), 13);
+  assert.equal(num(usages[0].value, 3), 6);
+});

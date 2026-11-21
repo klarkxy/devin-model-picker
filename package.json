@@ -1,0 +1,47 @@
+{
+  "name": "devin-model-picker",
+  "displayName": "Devin Model Picker",
+  "description": "Import OpenAI- and Anthropic-compatible BYOK models into Devin and pick Fusion lead/sidekick pairs from the model card UI.",
+  "version": "0.1.0",
+  "publisher": "klarkxy",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./src/extension.cjs",
+  "activationEvents": [
+    "*"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "package": "node scripts/package.cjs",
+    "vscode:uninstall": "node src/lifecycle/uninstall.cjs"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "devinModelPicker.openSettings",
+        "title": "Model Picker：设置"
+      },
+      {
+        "command": "devinModelPicker.reinject",
+        "title": "Model Picker：重新注入选择器"
+      },
+      {
+        "command": "devinModelPicker.disable",
+        "title": "Model Picker：停用并恢复"
+      }
+    ]
+  }
+}

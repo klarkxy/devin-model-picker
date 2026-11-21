@@ -1,0 +1,258 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const vm = require('node:vm');
+const { createRequire } = require('node:module');
+const actualBackend = require('../src/runtime/backend.cjs');
+const { collect } = require('../src/runtime/bridge.cjs');
+const { buildCatalog, augmentCatalog } = require('../src/catalog.cjs');
+const wire = require('../src/protocol/wire.cjs');
+const http = require('node:http');
+const API = '/exa.api_server_pb.ApiServerService/';
+
+test('same-version Anthropic adapter changes invalidate the runtime source identity', () => {
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  let adapterChanged = false;
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename), process,
+    require(name) {
+      if (name === 'node:fs') return { ...fs, readFileSync(file, ...options) {
+        const original = fs.readFileSync(file, ...options);
+        return adapterChanged && path.resolve(file) === path.resolve(__dirname, '../src/protocol/anthropic.cjs')
+          ? Buffer.concat([Buffer.from(original), Buffer.from('\n// synthetic adapter change\n')]) : original;
+      } };
+      return realRequire(name);
+    },
+  }, { filename });
+  const loaded = module.exports.runtimeIdentity('/synthetic-runtime-root');
+  adapterChanged = true;
+  assert.notEqual(module.exports.runtimeIdentity('/synthetic-runtime-root', true).sourceId, loaded.sourceId);
+  assert.equal(module.exports.runtimeIdentity('/synthetic-runtime-root').sourceId, loaded.sourceId);
+});
+
+async function fixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dmp-backend-test-'));
+  const config = { providers: [{ id: 'test', name: 'Test', models: [{ id: 'model', label: 'Model' }] }] };
+  const leadUid = Object.keys(buildCatalog(config).routes)[0];
+  config.fusionSlots = { a: { lead: { kind: 'byok', uid: leadUid }, sidekick: { kind: 'native', uid: 'swe-2-max' } },
+    b: { lead: { kind: 'byok', uid: leadUid }, sidekick: { kind: 'native', uid: 'gpt-5-6-luna-high' } } };
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config));
+  const forwarded = [], chats = [], logs = [];
+  const held = new Map();
+  let hold = false;
+  let natives = null;
+  const filename = path.resolve(__dirname, '../src/runtime/backend.cjs');
+  const realRequire = createRequire(filename);
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, exports: module.exports, __dirname: path.dirname(filename),
+    process, Buffer, URL, AbortController, setTimeout, clearTimeout,
+    require(name) {
+      if (name === './bridge.cjs') return {
+        collect,
+        async forward(req, res, target, options) {
+          const body = options.body ?? await collect(req);
+          forwarded.push({ target: target.href, body });
+          if (natives && /ModelConfigs|GetUserStatus/.test(req.url)) options.onNativeModels?.(natives);
+          if (hold) held.set(req.url, res);
+          else { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('official'); }
+        },
+      };
+      if (name === '../protocol/responses.cjs') return { serveChat: async ({ route, res }) => { chats.push(route); res.end('custom'); } };
+      return realRequire(name);
+    },
+  }, { filename });
+  const backend = await module.exports.startBackend({ root, port: 0, log: (...event) => logs.push(event) });
+  const base = 'http://127.0.0.1:' + backend.port;
+  t.after(async () => {
+    for (const res of held.values()) res.end();
+    await backend.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const health = () => fetch(base + '/health').then(r => r.json());
+  const control = () => JSON.parse(fs.readFileSync(actualBackend.controlFile(root), 'utf8'));
+  const shutdown = (token = control().token) => fetch(base + '/_runtime/shutdown', { method: 'POST', headers: { authorization: 'Bearer ' + token } });
+  return { root, config, backend, base, health, control, shutdown, forwarded, chats, logs, held,
+    setHold: value => { hold = value; }, setNatives: value => { natives = value; } };
+}
+
+test('runtime health exposes ownership and source identity without exposing its private control token', async t => {
+  const f = await fixture(t);
+  const health = await f.health();
+  const control = f.control();
+  assert.equal(health.service, 'devin-model-picker');
+  assert.equal(health.rootId, actualBackend.runtimeIdentity(f.root).rootId);
+  assert.match(health.sourceId, /^[a-f0-9]{64}$/);
+  assert.equal(health.managementProtocol, 1);
+  assert.equal(health.activeRequests, 0);
+  assert.equal(health.instanceId, control.instanceId);
+  assert.match(control.token, /^[a-f0-9]{64}$/);
+  assert.ok(!JSON.stringify(health).includes(control.token));
+  assert.ok(!JSON.stringify(f.logs).includes(control.token));
+  if (process.platform !== 'win32') assert.equal(fs.statSync(actualBackend.controlFile(f.root)).mode & 0o777, 0o600);
+  assert.equal((await f.shutdown('wrong-token')).status, 403);
+  assert.equal((await f.health()).draining, false);
+});
+
+test('safe shutdown refuses active RPCs and stops only after the complete response', async t => {
+  const f = await fixture(t);
+  f.setHold(true);
+  const rpc = '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings';
+  const inflight = fetch(f.base + rpc, { method: 'POST', body: 'native' });
+  while (!f.held.has(rpc)) await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await f.health()).activeRequests, 1);
+  assert.equal((await f.shutdown()).status, 409);
+  assert.equal((await f.health()).draining, false);
+  f.held.get(rpc).end('completed'); f.held.delete(rpc);
+  assert.equal(await (await inflight).text(), 'completed');
+  assert.equal((await f.health()).activeRequests, 0);
+  assert.equal((await f.shutdown()).status, 200);
+  await f.backend.stopped;
+  assert.equal(fs.existsSync(actualBackend.controlFile(f.root)), false);
+});
+
+test('public-origin control calls cannot stop the daemon even with a valid token', async t => {
+  const f = await fixture(t);
+  const response = await fetch(f.base + '/_runtime/shutdown', { method: 'POST', headers: {
+    origin: 'https://example.com', authorization: 'Bearer ' + f.control().token,
+  } });
+  assert.equal(response.status, 403);
+  assert.equal((await f.health()).draining, false);
+});
+
+test('a second startup on the same port cannot overwrite the running runtime control file', async t => {
+  const f = await fixture(t);
+  const previous = fs.readFileSync(actualBackend.controlFile(f.root), 'utf8');
+  await assert.rejects(actualBackend.startBackend({ root: f.root, port: f.backend.port }), { code: 'EADDRINUSE' });
+  assert.equal(fs.readFileSync(actualBackend.controlFile(f.root), 'utf8'), previous);
+});
+
+test('native model requests, unknown model IDs and wrong RPC services never select a custom provider', async t => {
+  const f = await fixture(t);
+  for (const [rpc, modelUid] of [[API + 'GetChatMessage?keep=1', 'swe-2-max'], [API + 'GetChatMessage', '__proto__'], ['/exa.other_pb.OtherService/GetChatMessage', Object.keys(buildCatalog(f.config).routes)[0]]]) {
+    const body = JSON.stringify({ modelUid, messages: [] });
+    const response = await fetch(f.base + rpc, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+    assert.equal(await response.text(), 'official');
+    assert.equal(f.forwarded.at(-1).body.toString(), body);
+    assert.equal(f.forwarded.at(-1).target, 'https://server.codeium.com' + rpc);
+  }
+  assert.deepEqual(f.chats, []);
+});
+
+test('disabled configuration forwards even an otherwise valid custom model to the native backend', async t => {
+  const f = await fixture(t);
+  const modelUid = Object.keys(buildCatalog(f.config).routes)[0];
+  f.config.enabled = false;
+  fs.writeFileSync(path.join(f.root, 'config.json'), JSON.stringify(f.config));
+  const response = await fetch(f.base + API + 'GetChatMessage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelUid }) });
+  assert.equal(await response.text(), 'official');
+  assert.deepEqual(f.chats, []);
+});
+
+test('known custom model requests use their exact provider route', async t => {
+  const f = await fixture(t);
+  const modelUid = Object.keys(buildCatalog(f.config).routes)[0];
+  const response = await fetch(f.base + API + 'GetChatMessage', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelUid }) });
+  assert.equal(await response.text(), 'custom');
+  assert.equal(f.chats.length, 1);
+  assert.equal(f.chats[0].uid, modelUid);
+  assert.deepEqual(f.forwarded, []);
+});
+
+test('an own plain model is listed, allowed and callable standalone against a third-party endpoint', async t => {
+  const calls = [];
+  const sse = 'data: {"choices":[{"index":0,"delta":{"content":"standalone-ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
+  const provider = http.createServer(async (req, res) => {
+    calls.push({ url: req.url, authorization: req.headers.authorization, body: JSON.parse((await collect(req)).toString()) });
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(sse);
+  });
+  await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { provider.close(resolve); provider.closeAllConnections(); }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dmp-backend-standalone-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = { providers: [{ id: 'third', name: 'Third', baseUrl: `http://127.0.0.1:${provider.address().port}/v1`,
+    apiFormat: 'openai', apiKey: 'fixture-provider-key', models: [{ id: 'standalone-model', label: 'Standalone' }] }] };
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config));
+  const backend = await actualBackend.startBackend({ root, port: 0 });
+  t.after(() => backend.close());
+  const catalog = buildCatalog(config);
+  const own = Object.keys(catalog.routes)[0];
+  assert.match(own, /^dmp-/);
+  const proto = { json: false, type: 'application/proto', framed: false };
+  const allowed = augmentCatalog(wire.s(7, 'native-gpt'), { rpc: '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings', format: proto, catalog });
+  const uids = wire.parseFields(allowed).filter(field => field.number === 7).map(field => field.value.toString());
+  assert.equal(uids[0], 'native-gpt');
+  assert.ok(uids.includes(own));
+  assert.equal(Object.keys(catalog.fusions).length, 0, 'no configured slots means no resolvable fusions');
+  const lockedNative = Buffer.concat([wire.s(1, 'Fusion (Locked)'), wire.s(22, 'fusion-official-locked'), wire.v(4, 1)]);
+  const listed = augmentCatalog(wire.m(1, lockedNative), { rpc: API + 'GetCliModelConfigs', format: proto, catalog });
+  const entries = wire.parseFields(listed).filter(field => field.number === 1 && field.wire === 2).map(field => field.value);
+  assert.ok(['fusion-dmp-a', 'fusion-dmp-b'].includes(wire.str(entries[0], 22)));
+  assert.equal(wire.str(entries.at(-1), 22), 'fusion-official-locked');
+  assert.equal(wire.num(entries.at(-1), 4), 1);
+  const response = await fetch('http://127.0.0.1:' + backend.port + API + 'GetChatMessage', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ modelUid: own, messages: [{ role: 'user', content: 'hi' }] }) });
+  assert.equal(response.status, 200);
+  assert.ok((await response.text()).includes('standalone-ok'));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/v1/chat/completions');
+  assert.equal(calls[0].body.model, 'standalone-model');
+  assert.equal(calls[0].authorization, 'Bearer fixture-provider-key');
+});
+
+test('a catalog observation enables AssignModel for a slot with the observed native Sidekick harnesses', async t => {
+  const f = await fixture(t);
+  const observed = [
+    { uid: 'swe-2-max', label: 'SWE-2 Max', disabled: false, isModelRouter: false, harnessUids: ['swe-1p5', 'other-harness'] },
+    { uid: 'fusion-lead-a-sidekick-swe-2-max', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'], sidekickDimension: { order: 3, name: 'SWE-2 Max' } },
+  ];
+  const fusion = buildCatalog(f.config, observed).fusions['fusion-dmp-a'];
+  assert.ok(fusion, 'slot a pairs a BYOK lead with native swe-2-max');
+  const body = JSON.stringify({ modelRouterUid: fusion.uid, fusionLeadRouterUid: fusion.uid });
+  const cold = await fetch(f.base + API + 'AssignModel', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+  assert.equal(await cold.text(), 'official', 'before any catalog observation the slot fails closed');
+  f.setNatives(observed);
+  const catalogResponse = await fetch(f.base + API + 'GetCliModelConfigs', { method: 'POST', body: 'native' });
+  assert.equal(await catalogResponse.text(), 'official');
+  const resolved = await fetch(f.base + API + 'AssignModel', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+  const data = JSON.parse(await resolved.text());
+  assert.equal(data.assignment.modelUid, 'swe-2-max');
+  assert.deepEqual(data.assignment.harnessUids, ['swe-1p5', 'other-harness']);
+});
+
+test('a saved slot alone never grants capability without observation', async t => {
+  const f = await fixture(t);
+  const fusionUid = 'fusion-dmp-a';
+  const response = await fetch(f.base + API + 'AssignModel', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ modelRouterUid: fusionUid, fusionLeadRouterUid: fusionUid }) });
+  assert.equal(await response.text(), 'official');
+  assert.equal(f.forwarded.at(-1).target, 'https://server.codeium.com' + API + 'AssignModel');
+});
+
+test('disabled or unobserved native sidekicks never resolve a slot', async t => {
+  const f = await fixture(t);
+  const observed = [
+    { uid: 'gpt-5-6-luna-high', label: 'GPT-5.6 Luna High Thinking', disabled: false, isModelRouter: false, harnessUids: ['gpt-5p6'] },
+    { uid: 'fusion-official-sidekick-gpt-5-6-luna-high', label: 'F', disabled: false, isModelRouter: true, harnessUids: ['fusion'],
+      sidekickDimension: { order: 4, name: 'GPT-5.6 Luna High' } },
+  ];
+  const built = buildCatalog(f.config, observed);
+  const luna = built.fusions['fusion-dmp-b'];
+  assert.ok(luna, 'enabled official pairing makes slot b resolvable');
+  const disabled = observed.map(item => item.uid === 'gpt-5-6-luna-high' ? { ...item, disabled: true } : item);
+  assert.equal(buildCatalog(f.config, disabled).fusions['fusion-dmp-b'], undefined, 'disabled native drops the slot');
+  f.setNatives(observed);
+  await fetch(f.base + API + 'GetCliModelConfigs', { method: 'POST', body: 'native' });
+  const resolved = await fetch(f.base + API + 'AssignModel', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ modelRouterUid: luna.uid, fusionLeadRouterUid: luna.uid }) });
+  const data = JSON.parse(await resolved.text());
+  assert.equal(data.assignment.modelUid, 'gpt-5-6-luna-high');
+  assert.deepEqual(data.assignment.harnessUids, ['gpt-5p6'], 'the declared official harness is forwarded exactly');
+});
