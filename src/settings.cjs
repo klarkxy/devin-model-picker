@@ -3,34 +3,10 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { discover } = require('./config.cjs');
 const { normalizeBaseUrlPath } = require('./panel/base-url.cjs');
-const { loadIndex, lookup, mergeMetadata } = require('./models-dev.cjs');
-const { modelEfforts } = require('./model-capabilities.cjs');
-const { buildCatalog } = require('./catalog.cjs');
-
-class SettingsInputError extends Error {}
-const fail = message => { throw new SettingsInputError(message); };
-function text(value, label, maximum = 256) {
-  if (typeof value !== 'string' || !value.trim() || value.length > maximum || /[\u0000-\u001f]/.test(value)) fail(label + '无效。');
-  return value.trim();
-}
-function baseUrl(value) {
-  let url; try { url = new URL(text(value, 'API 地址', 2048)); } catch { fail('请填写完整的 http:// 或 https:// API 地址。'); }
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail('API 地址不能包含登录信息、查询参数或片段。');
-  url.pathname = normalizeBaseUrlPath(url.pathname);
-  return url.toString().replace(/\/$/, '');
-}
-function boolean(value, label) { if (typeof value !== 'boolean') fail(label + '无效。'); return value; }
-function providerAt(config, id) { return config.providers.find(provider => provider.id === id) || fail('该供应商已不存在，请刷新。'); }
-
-// Merges a raw /models item with the models.dev index entry into the stored
-// model shape. re-import/refresh recomputes all metadata fields.
-function mergeModel(provider, item, index) {
-  const merged = mergeMetadata(item.id, item, lookup(index, item.id));
-  return { id: item.id, label: merged.label || provider.name + ' · ' + item.id,
-    contextWindow: merged.contextWindow, maxOutputTokens: merged.maxOutputTokens,
-    efforts: merged.efforts ?? modelEfforts({ id: item.id }),
-    supportsImages: merged.supportsImages, meta: merged.meta };
-}
+const { loadIndex } = require('./models-dev.cjs');
+const { SettingsInputError, mergeModel, signature: providerSignature,
+  setEnabled, saveProvider, deleteProvider, setProviderEnabled, setModelEnabled,
+  removeModel, discoverModels, importView, importModels, refreshMeta } = require('./byok-ops.cjs');
 
 function publicState(config) {
   return {
@@ -211,7 +187,6 @@ function openSettings({ vscode, context, root, configFile, read, write, log = ()
   panel.webview.html = HTML.replaceAll('__NONCE__', n).replace('__NORMALIZE__', normalizeBaseUrlPath.toString());
   panel.onDidDispose(() => { panel = undefined; }, null, context.subscriptions);
   let pending = null;
-  const signature = provider => JSON.stringify([provider.id, provider.baseUrl, provider.apiFormat, provider.apiKey]);
   const state = () => publicState(read());
   const push = () => { try { panel.webview.postMessage({ type: 'state', state: state() }); } catch {} };
   const failTo = message => { try { panel.webview.postMessage({ type: 'error', message }); } catch {} };
@@ -224,79 +199,40 @@ function openSettings({ vscode, context, root, configFile, read, write, log = ()
       const config = read();
       switch (op) {
         case 'setEnabled':
-          config.enabled = boolean(payload.enabled, '启用状态');
+          setEnabled(config, payload);
           write(config); await changed(); return;
-        case 'saveProvider': {
-          const existing = payload.id ? providerAt(config, payload.id) : null;
-          const name = text(payload.name, '供应商名称', 80), url = baseUrl(payload.baseUrl);
-          if (!['openai-responses', 'openai', 'anthropic'].includes(payload.apiFormat)) fail('请选择 API 类型。');
-          if (payload.apiKey !== undefined && (typeof payload.apiKey !== 'string' || payload.apiKey.length > 8192 || /[\r\n]/.test(payload.apiKey))) fail('API Key 无效。');
-          const apiKey = payload.apiKey?.trim() || existing?.apiKey || '';
-          if (existing) {
-            const previousName = existing.name;
-            Object.assign(existing, { name, baseUrl: url, apiFormat: payload.apiFormat, apiKey });
-            if (name !== previousName) for (const model of existing.models) if (model.label?.startsWith(previousName + ' · ')) model.label = name + model.label.slice(previousName.length);
-          } else config.providers.push({ id: 'provider-' + crypto.randomUUID(), name, baseUrl: url, apiFormat: payload.apiFormat, apiKey, enabled: true, models: [] });
+        case 'saveProvider':
+          saveProvider(config, payload);
           write(config); try { panel.webview.postMessage({ type: 'close' }); } catch {}
           await changed(); return;
-        }
         case 'deleteProvider':
-          providerAt(config, payload.id);
-          config.providers = config.providers.filter(p => p.id !== payload.id);
+          deleteProvider(config, payload);
           write(config); await changed(); return;
         case 'setProviderEnabled':
-          providerAt(config, payload.id).enabled = boolean(payload.enabled, '启用状态');
+          setProviderEnabled(config, payload);
           write(config); await changed(); return;
-        case 'setModelEnabled': {
-          const model = providerAt(config, payload.providerId).models.find(m => m.id === payload.modelId) || fail('该模型已不存在。');
-          model.enabled = boolean(payload.enabled, '启用状态');
+        case 'setModelEnabled':
+          setModelEnabled(config, payload);
           write(config); await changed(); return;
-        }
-        case 'removeModel': {
-          const provider = providerAt(config, payload.providerId);
-          provider.models = provider.models.filter(m => m.id !== payload.modelId);
+        case 'removeModel':
+          removeModel(config, payload);
           write(config); await changed(); return;
-        }
         case 'discover': {
-          const provider = providerAt(config, payload.providerId);
-          const items = await discover(provider);
           const index = await modelsDevIndex();
-          const merged = items.map(item => mergeModel(provider, item, index));
-          // Validate a private candidate catalog without changing saved models.
-          buildCatalog({ ...config, providers: [{ ...provider, enabled: true, models: merged.map(m => ({ ...m, enabled: true })) }] });
-          pending = { providerId: provider.id, signature: signature(provider), token: crypto.randomUUID(), models: merged };
-          panel.webview.postMessage({ type: 'import', providerId: provider.id, token: pending.token,
-            models: merged.map(m => ({ id: m.id, label: m.label, contextWindow: m.contextWindow, maxOutputTokens: m.maxOutputTokens,
-              efforts: m.efforts, supportsImages: m.supportsImages, source: m.meta.source,
-              imported: provider.models.some(existing => existing.id === m.id) })) });
+          const { provider, models } = await discoverModels(config, payload, { discover, index });
+          pending = { providerId: provider.id, signature: providerSignature(provider), token: crypto.randomUUID(), models };
+          panel.webview.postMessage({ type: 'import', providerId: provider.id, token: pending.token, models: importView(provider, models) });
           return;
         }
         case 'importModels': {
-          const provider = providerAt(config, payload.providerId);
-          if (!pending || pending.providerId !== provider.id || pending.token !== payload.token || pending.signature !== signature(provider)) fail('模型列表已失效，请重新获取后选择。');
-          if (!Array.isArray(payload.ids) || payload.ids.some(id => typeof id !== 'string') || new Set(payload.ids).size !== payload.ids.length) fail('请选择要导入的模型。');
-          const candidates = new Map(pending.models.map(m => [m.id, m]));
-          if (payload.ids.some(id => !candidates.has(id))) fail('所选模型不在获取的列表中，请重新选择。');
-          const existing = new Set(provider.models.map(m => m.id));
-          for (const id of payload.ids) {
-            if (existing.has(id)) { const current = provider.models.find(m => m.id === id); Object.assign(current, candidates.get(id), { enabled: current.enabled }); }
-            else provider.models.push({ ...candidates.get(id), enabled: true });
-          }
+          importModels(config, payload, pending);
           write(config); pending = null;
           try { panel.webview.postMessage({ type: 'close' }); } catch {}
           await changed(); return;
         }
         case 'refreshMeta': {
-          const provider = providerAt(config, payload.providerId);
-          const items = await discover(provider);
           const index = await modelsDevIndex();
-          const byId = new Map(items.map(item => [item.id, item]));
-          for (const model of provider.models) {
-            const merged = mergeModel(provider, byId.get(model.id) || { id: model.id }, index);
-            Object.assign(model, { label: merged.label, contextWindow: merged.contextWindow,
-              maxOutputTokens: merged.maxOutputTokens, efforts: merged.efforts,
-              supportsImages: merged.supportsImages, meta: merged.meta });
-          }
+          await refreshMeta(config, payload, { discover, index });
           write(config); await changed(); return;
         }
       }

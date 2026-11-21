@@ -3,7 +3,9 @@
 // Renderer-side card picker API. The injected workbench script runs with origin
 // vscode-file://vscode-app; that exact origin is required on every /picker/*
 // request while all other backend routes keep rejecting any Origin header.
+const crypto = require('node:crypto');
 const { effortMetadata } = require('./catalog.cjs');
+const ops = require('./byok-ops.cjs');
 
 const PICKER_ORIGIN = 'vscode-file://vscode-app';
 const BODY_LIMIT = 64 * 1024;
@@ -140,6 +142,77 @@ async function pickerFusion(body, { catalog, config, configFile, writeConfig, ob
   return { status: 200, body: { uid: 'fusion-dmp-' + slot } };
 }
 
+// baseUrl with credentials and query stripped — safe to echo back. Stored
+// values already pass validation; this guards hand-edited config.json files.
+function safeBaseUrl(value) {
+  try {
+    const url = new URL(String(value));
+    url.username = ''; url.password = ''; url.search = ''; url.hash = '';
+    return url.toString().replace(/\/$/, '');
+  } catch { return String(value || '').split('?')[0]; }
+}
+
+// GET /picker/providers — never includes apiKey.
+function providerList(config) {
+  return { providers: (Array.isArray(config.providers) ? config.providers : []).map(provider => ({
+    id: provider.id, name: provider.name, baseUrl: safeBaseUrl(provider.baseUrl),
+    apiFormat: provider.apiFormat, keyConfigured: !!provider.apiKey,
+    models: (provider.models || []).map(model => ({ id: model.id, label: model.label || model.id })),
+  })) };
+}
+
+function ensureProviders(config) { if (!Array.isArray(config.providers)) config.providers = []; }
+
+const PROVIDER_POSTS = new Map([
+  ['/picker/providers/save', async (body, ctx) => {
+    const config = ctx.config;
+    ensureProviders(config);
+    const id = ops.saveProvider(config, body || {});
+    ctx.writeConfig(ctx.configFile, config);
+    return { status: 200, body: { id } };
+  }],
+  ['/picker/providers/discover', async (body, ctx) => {
+    const config = ctx.config;
+    ensureProviders(config);
+    const index = await ctx.modelsDevIndex?.();
+    let result;
+    try {
+      result = await ops.discoverModels(config, body || {}, { discover: ctx.discover, index });
+    } catch (error) {
+      if (error instanceof ops.SettingsInputError) throw error;
+      return { status: 502, body: { error: 'discover_failed', message: '获取模型失败，请检查接口配置和连接状态。' } };
+    }
+    const pending = ctx.pendingDiscovers || (ctx.pendingDiscovers = new Map());
+    const token = crypto.randomUUID();
+    pending.set(result.provider.id, { providerId: result.provider.id,
+      signature: ops.signature(result.provider), token, models: result.models });
+    return { status: 200, body: { token, models: ops.importView(result.provider, result.models) } };
+  }],
+  ['/picker/providers/import', async (body, ctx) => {
+    const config = ctx.config;
+    ensureProviders(config);
+    const id = typeof body?.id === 'string' ? body.id : body?.providerId;
+    const count = ops.importModels(config, body || {}, ctx.pendingDiscovers?.get(id) ?? null);
+    ctx.writeConfig(ctx.configFile, config);
+    return { status: 200, body: { ok: true, imported: count } };
+  }],
+  ['/picker/providers/delete', async (body, ctx) => {
+    const config = ctx.config;
+    ensureProviders(config);
+    ops.deleteProvider(config, body || {});
+    ctx.pendingDiscovers?.delete(body?.id);
+    ctx.writeConfig(ctx.configFile, config);
+    return { status: 200, body: { ok: true } };
+  }],
+  ['/picker/models/remove', async (body, ctx) => {
+    const config = ctx.config;
+    ensureProviders(config);
+    ops.removeModel(config, body || {});
+    ctx.writeConfig(ctx.configFile, config);
+    return { status: 200, body: { ok: true } };
+  }],
+]);
+
 async function readBody(request, limit = BODY_LIMIT) {
   const chunks = [];
   let length = 0;
@@ -167,6 +240,28 @@ async function handlePickerRequest(request, response, pathname, context) {
     }
     const result = await pickerFusion(body, context);
     send(response, result.status, result.body);
+    return true;
+  }
+  if (request.method === 'GET' && pathname === '/picker/providers') {
+    send(response, 200, providerList(context.config));
+    return true;
+  }
+  const providerPost = PROVIDER_POSTS.get(pathname);
+  if (request.method === 'POST' && providerPost) {
+    let body;
+    try { body = JSON.parse(await readBody(request)); }
+    catch (error) {
+      send(response, error?.message === 'too_large' ? 413 : 400, { error: error?.message === 'too_large' ? 'too_large' : 'invalid_input' });
+      return true;
+    }
+    try {
+      const result = await providerPost(body, context);
+      send(response, result.status, result.body);
+    } catch (error) {
+      if (error instanceof ops.SettingsInputError) {
+        send(response, 400, { error: 'invalid_input', message: error.message });
+      } else throw error;
+    }
     return true;
   }
   send(response, 404, { error: 'not_found' });

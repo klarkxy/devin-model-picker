@@ -263,10 +263,11 @@ function groupCards(models, state) {
     // stable name basis so every effort variant lands on the same card.
     const parsed = cardName(byokEntry?.modelId || baseLabel(model, byokEntry));
     const key = cardKey(parsed);
-    if (!cards.has(key)) cards.set(key, { ...parsed, cardKey: key, families: new Map() });
+    if (!cards.has(key)) cards.set(key, { ...parsed, cardKey: key, prefKey: key, families: new Map() });
     const card = cards.get(key);
     if (!card.families.has(familyUid)) {
-      card.families.set(familyUid, { providerName, vendor: vendorOf(model, byokEntry), variants: [], familyLabel: '' });
+      card.families.set(familyUid, { providerName, vendor: vendorOf(model, byokEntry), variants: [], familyLabel: '',
+        providerId: byokEntry?.providerId || null, modelId: byokEntry?.modelId || null });
     }
     const family = card.families.get(familyUid);
     if (providerName && !family.providerName) family.providerName = providerName;
@@ -323,8 +324,10 @@ function groupFusion(candidates, nativeIndex) {
     const toggles = Object.fromEntries(toggleDims.map(([key, val]) => [key, Number(val.order) || 0]));
     const parsed = cardName(nativeEntry?.familyLabel || candidate.familyLabel || candidate.label);
     const key = (ref.kind === 'byok' ? 'b:' : 'n:') + familyKey;
-    if (!cards.has(key)) cards.set(key, { ...parsed, cardKey: key, providerName: candidate.providerName,
-      vendor: ref.kind === 'byok' ? 'other' : 'windsurf', variants: [], familyLabel: '' });
+    if (!cards.has(key)) cards.set(key, { ...parsed, cardKey: key, prefKey: cardKey(parsed), providerName: candidate.providerName,
+      vendor: ref.kind === 'byok' ? 'other' : 'windsurf', variants: [], familyLabel: '',
+      providerId: ref.kind === 'byok' ? (candidate.familyKey || '').split(':')[1] || null : null,
+      modelId: ref.kind === 'byok' ? (candidate.familyKey || '').split(':')[2] || null : null });
     const card = cards.get(key);
     if (!card.familyLabel) {
       let base = (ref.kind === 'native' && nativeEntry?.familyLabel) || candidate.familyLabel || stripProvider(candidate.label || '');
@@ -378,6 +381,86 @@ function prefillFusion(value, state, candidates) {
   return result;
 }
 
+// Card preferences: order/favorites/hidden/aliases keyed by the canonical
+// cardKey ('name|version|variant', lowercase) — shared by both modes.
+function sanitizePrefs(raw) {
+  const out = { order: [], favorites: [], hidden: [], aliases: {} };
+  if (!raw || typeof raw !== 'object') return out;
+  const keys = value => Array.isArray(value)
+    ? [...new Set(value.filter(item => typeof item === 'string' && item.trim() !== ''))]
+    : [];
+  out.order = keys(raw.order);
+  out.favorites = keys(raw.favorites);
+  out.hidden = keys(raw.hidden);
+  if (raw.aliases && typeof raw.aliases === 'object' && !Array.isArray(raw.aliases)) {
+    for (const [key, value] of Object.entries(raw.aliases)) {
+      if (typeof value === 'string' && value.trim()) out.aliases[key] = value.trim().slice(0, 40);
+    }
+  }
+  return out;
+}
+
+// Order: prefs.order ranks first (ties/unranked keep catalog order), then
+// favorites stable-partitioned to the front, hidden removed unless shown.
+// Mutates cards: .favorite, .hidden.
+function arrangeCards(cards, prefs, showHidden) {
+  const rank = new Map((prefs?.order || []).map((key, index) => [key, index]));
+  const sorted = [...cards].sort((a, b) => {
+    const ra = rank.get(a.prefKey), rb = rank.get(b.prefKey);
+    if (ra !== undefined && rb !== undefined) return ra - rb;
+    if (ra !== undefined) return -1;
+    if (rb !== undefined) return 1;
+    return 0;
+  });
+  const favorites = new Set(prefs?.favorites || []);
+  const hidden = new Set(prefs?.hidden || []);
+  for (const card of sorted) {
+    card.favorite = favorites.has(card.prefKey);
+    card.hidden = hidden.has(card.prefKey);
+  }
+  sorted.sort((a, b) => Number(b.favorite) - Number(a.favorite));
+  return sorted.filter(card => showHidden || !card.hidden);
+}
+
+// 3-zone drop reorder over an ordered key list: 'before'/'after' move the
+// source next to the target, 'swap' exchanges both in place.
+function applyCardDrop(keys, fromIndex, toIndex, mode) {
+  const next = [...keys];
+  if (fromIndex < 0 || fromIndex >= next.length || toIndex < 0 || toIndex >= next.length || fromIndex === toIndex) return next;
+  if (mode === 'swap') {
+    const temp = next[fromIndex]; next[fromIndex] = next[toIndex]; next[toIndex] = temp;
+    return next;
+  }
+  let insert = mode === 'before' ? toIndex : toIndex + 1;
+  const [moved] = next.splice(fromIndex, 1);
+  if (fromIndex < insert) insert -= 1;
+  next.splice(insert, 0, moved);
+  return next;
+}
+
+// Drop zone from the pointer's horizontal ratio inside a card (0..1).
+function dropModeFromRatio(ratio) { return ratio < 0.28 ? 'before' : ratio > 0.72 ? 'after' : 'swap'; }
+
+// Move key to first/last slot; returns a copy even when the key is absent.
+function moveCardKey(keys, key, mode) {
+  const index = keys.indexOf(key);
+  if (index < 0) return [...keys];
+  const next = [...keys];
+  next.splice(index, 1);
+  if (mode === 'first') next.unshift(key); else next.push(key);
+  return next;
+}
+
+function toggleKey(list, key) { return list.includes(key) ? list.filter(item => item !== key) : [...list, key]; }
+
+// Fold a reordered subset (e.g. only the visible cards) back into the full
+// key arrangement: subset keys keep their slots, filled in the new order.
+function mergeSubsetOrder(fullKeys, reorderedSubset) {
+  const queue = [...reorderedSubset];
+  const inSubset = new Set(reorderedSubset);
+  return fullKeys.map(key => (inSubset.has(key) && queue.length ? queue.shift() : key));
+}
+
 // Validates a saved fusion draft against the current candidates: each ref must
 // still be a candidate in its own role.
 function validDraft(draft, candidates) {
@@ -403,7 +486,8 @@ const LS_KEY = 'devin-model-picker:v1';
 const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, baseLabel,
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
   underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
-  validDraft, pickFusionSlots,
+  validDraft, pickFusionSlots, sanitizePrefs, arrangeCards, applyCardDrop, dropModeFromRatio,
+  moveCardKey, toggleKey, mergeSubsetOrder,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
 if (typeof module === 'object' && module.exports) { module.exports = exportsMap; return; }
 
@@ -489,6 +573,49 @@ const CSS = `
  font-size:12px;padding:6px 14px;cursor:pointer}
 .dmp-apply:disabled{opacity:.45;cursor:default}
 .dmp-err{font-size:11px;color:#ef4444}
+.dmp-card.dmp-hid{opacity:.5}
+.dmp-card[data-drop="before"]{box-shadow:-3px 0 0 0 var(--dmp-sel)}
+.dmp-card[data-drop="after"]{box-shadow:3px 0 0 0 var(--dmp-sel)}
+.dmp-card[data-drop="swap"]{outline:2px dashed var(--dmp-sel);outline-offset:-2px}
+.dmp-card.dmp-drag{opacity:.5}
+.dmp-star{font-size:10px;color:#f5a623;flex:none}
+.dmp-add{border-style:dashed;align-items:center;justify-content:center;min-height:96px;
+ color:var(--dmp-muted);font-size:12px;background:transparent}
+.dmp-add:hover{color:var(--dmp-fg);border-color:var(--dmp-muted);background:var(--dmp-card-hover)}
+.dmp-rename{font:700 16px/1.15 inherit;color:inherit;border:1px solid var(--dmp-sel);border-radius:4px;
+ background:var(--dmp-bg);padding:0 3px;min-width:0;width:100%;box-sizing:border-box}
+.dmp-menu{position:absolute;z-index:20;min-width:150px;background:var(--dmp-bg);
+ border:1px solid var(--dmp-border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35);padding:3px}
+.dmp-menu button{display:block;width:100%;border:0;background:transparent;color:var(--dmp-fg);
+ text-align:left;font-size:12px;padding:5px 10px;border-radius:6px;cursor:pointer}
+.dmp-menu button:hover{background:var(--dmp-card-hover)}
+.dmp-menu button.dmp-danger{color:#ef4444}
+.dmp-showhidden{border:1px solid var(--dmp-border);border-radius:6px;background:transparent;
+ color:var(--dmp-muted);font-size:11px;padding:2px 8px;cursor:pointer}
+.dmp-status{font-size:11px;color:var(--dmp-muted)}
+.dmp-sheet{position:absolute;inset:0;z-index:15;display:flex;flex-direction:column;
+ background:var(--dmp-bg);border-radius:12px}
+.dmp-sheet-head{display:flex;align-items:center;gap:8px;padding:10px 12px;
+ border-bottom:1px solid var(--dmp-border);font-size:13px;font-weight:600}
+.dmp-sheet-x{margin-left:auto;border:0;background:transparent;color:var(--dmp-muted);
+ font-size:14px;cursor:pointer;padding:2px 6px}
+.dmp-sheet-body{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:7px}
+.dmp-sheet label.dmp-lab{font-size:11px;color:var(--dmp-muted);display:block;margin-bottom:2px}
+.dmp-sheet input[type=text],.dmp-sheet input[type=password],.dmp-sheet select{
+ width:100%;box-sizing:border-box;border:1px solid var(--dmp-border);border-radius:7px;
+ background:var(--dmp-bg);color:var(--dmp-fg);padding:6px 8px;font-size:12px;outline:none}
+.dmp-sheet input:focus,.dmp-sheet select:focus{border-color:var(--dmp-sel)}
+.dmp-sheet-foot{display:flex;gap:8px;justify-content:flex-end;padding:10px 12px;
+ border-top:1px solid var(--dmp-border)}
+.dmp-btn{white-space:nowrap;flex:none;border:0;border-radius:7px;background:var(--dmp-sel);color:#fff;font-size:12px;
+ padding:6px 12px;cursor:pointer}
+.dmp-btn:disabled{opacity:.45;cursor:default}
+.dmp-btn.sec{background:var(--dmp-chip);color:var(--dmp-fg)}
+.dmp-btn.danger{background:#dc2626;color:#fff}
+.dmp-models{flex:1;min-height:0;overflow-y:auto;border:1px solid var(--dmp-border);border-radius:8px}
+.dmp-model{display:flex;gap:7px;align-items:baseline;padding:5px 8px;font-size:12px;cursor:pointer}
+.dmp-model:hover{background:var(--dmp-card-hover)}
+.dmp-model .meta{color:var(--dmp-muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (prefers-reduced-motion:reduce){.dmp-panel{transition:none}}
 `;
 
@@ -575,6 +702,19 @@ function saveDraft() {
   } catch {}
 }
 
+// Card preferences (order/favorites/hidden/aliases) live in the same LS object.
+function loadPrefs() {
+  try { return sanitizePrefs(JSON.parse(localStorage.getItem(LS_KEY) || '{}').prefs); } catch { return sanitizePrefs(null); }
+}
+function savePrefs() {
+  try {
+    const data = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    data.prefs = panelState?.prefs || sanitizePrefs(null);
+    localStorage.setItem(LS_KEY, JSON.stringify(data));
+  } catch {}
+}
+function prefAlias(key) { return panelState?.prefs?.aliases?.[key] || null; }
+
 // Panel ----------------------------------------------------------------------
 let styleNode = null;
 let panel = null;
@@ -653,6 +793,362 @@ function refreshLocated(final) {
   rerenderGrid();
 }
 
+// --- Context menu, drag & drop, rename --------------------------------------
+
+function openMenu(x, y, items) {
+  closeMenu();
+  const menu = el('div', 'dmp-menu');
+  for (const item of items) {
+    const btn = el('button', item.danger ? 'dmp-danger' : '', item.label);
+    btn.addEventListener('click', event => { event.stopPropagation(); closeMenu(); item.action(); });
+    menu.appendChild(btn);
+  }
+  panel.appendChild(menu);
+  const pr = panel.getBoundingClientRect(), mr = menu.getBoundingClientRect();
+  let left = x - pr.left, top = y - pr.top;
+  if (left + mr.width > pr.width - 4) left = pr.width - mr.width - 4;
+  if (top + mr.height > pr.height - 4) top = pr.height - mr.height - 4;
+  menu.style.left = Math.max(4, left) + 'px';
+  menu.style.top = Math.max(4, top) + 'px';
+  panelState.menu = menu;
+}
+function closeMenu() {
+  if (!panelState) return;
+  panelState.menu?.remove();
+  panelState.menu = null;
+}
+
+function commitRename(key, value) {
+  const alias = (value || '').trim().slice(0, 40);
+  if (alias) panelState.prefs.aliases[key] = alias; else delete panelState.prefs.aliases[key];
+  panelState.editing = null;
+  savePrefs();
+  rerenderGrid();
+}
+
+function cardMenuItems(card, resolveUid) {
+  const prefs = panelState.prefs;
+  const key = card.prefKey;
+  const items = [
+    { label: card.favorite ? '取消收藏' : '收藏', action: () => {
+      prefs.favorites = toggleKey(prefs.favorites, key); savePrefs(); rerenderGrid(); } },
+    { label: '移到最前', action: () => {
+      const base = prefs.order.includes(key) ? prefs.order : [...prefs.order, key];
+      prefs.order = moveCardKey(base, key, 'first'); savePrefs(); rerenderGrid(); } },
+    { label: '移到最后', action: () => {
+      const base = prefs.order.includes(key) ? prefs.order : [...prefs.order, key];
+      prefs.order = moveCardKey(base, key, 'last'); savePrefs(); rerenderGrid(); } },
+    { label: '重命名', action: () => { panelState.editing = key; rerenderGrid(); } },
+  ];
+  if (prefs.aliases[key]) items.push({ label: '恢复原名', action: () => {
+    delete prefs.aliases[key]; savePrefs(); rerenderGrid(); } });
+  const uid = resolveUid();
+  if (uid) items.push({ label: '复制模型 ID', action: () => {
+    try { navigator.clipboard?.writeText(uid)?.catch?.(() => {}); } catch {} } });
+  items.push({ label: card.hidden ? '取消隐藏' : '隐藏', action: () => {
+    prefs.hidden = toggleKey(prefs.hidden, key); savePrefs(); rerenderGrid(); } });
+  const byokInfo = card.providerId ? card
+    : (card.families || []).find(family => family.providerId) || null;
+  if (byokInfo) {
+    items.push({ label: '管理供应商…', action: () => openSheet({ providerId: byokInfo.providerId }) });
+    items.push({ label: '从 BYOK 移除此模型', danger: true,
+      action: () => removeByokModel(byokInfo.providerId, byokInfo.modelId) });
+  }
+  return items;
+}
+
+// Shared card chrome: context menu + 3-zone HTML5 drag reorder (same group only).
+function wireCardChrome(node, card, index, resolveUid) {
+  node.addEventListener('contextmenu', event => {
+    event.preventDefault(); event.stopPropagation();
+    openMenu(event.clientX, event.clientY, cardMenuItems(card, resolveUid));
+  });
+  node.draggable = true;
+  node.addEventListener('dragstart', event => {
+    if (panelState.editing) { event.preventDefault(); return; }
+    panelState.dragIndex = index;
+    panelState.dragCard = card;
+    node.classList.add('dmp-drag');
+    try { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', card.prefKey); } catch {}
+  });
+  node.addEventListener('dragend', () => {
+    panelState.dragIndex = null;
+    panelState.dragCard = null;
+    node.classList.remove('dmp-drag');
+    for (const marked of panel.querySelectorAll('[data-drop]')) marked.removeAttribute('data-drop');
+    panelState.suppressClick = true;
+    setTimeout(() => { if (panelState) panelState.suppressClick = false; }, 80);
+  });
+  node.addEventListener('dragover', event => {
+    const src = panelState.dragCard;
+    if (!src || src === card || src.favorite !== card.favorite) { node.removeAttribute('data-drop'); return; }
+    event.preventDefault();
+    const rect = node.getBoundingClientRect();
+    node.setAttribute('data-drop', dropModeFromRatio((event.clientX - rect.left) / Math.max(1, rect.width)));
+  });
+  node.addEventListener('dragleave', () => node.removeAttribute('data-drop'));
+  node.addEventListener('drop', event => {
+    event.preventDefault();
+    const src = panelState.dragCard;
+    const rect = node.getBoundingClientRect();
+    node.removeAttribute('data-drop');
+    if (!src || src === card || src.favorite !== card.favorite || panelState.dragIndex == null) return;
+    const mode = dropModeFromRatio((event.clientX - rect.left) / Math.max(1, rect.width));
+    const keys = (panelState.visibleCards || []).map(item => item.prefKey);
+    const toIndex = keys.indexOf(card.prefKey);
+    if (toIndex < 0) return;
+    panelState.prefs.order = mergeSubsetOrder(panelState.fullKeys || keys,
+      applyCardDrop(keys, panelState.dragIndex, toIndex, mode));
+    savePrefs();
+    rerenderGrid();
+  });
+}
+
+function renameField(card, nameRow) {
+  const input = el('input', 'dmp-rename');
+  input.value = prefAlias(card.prefKey) || card.name;
+  input.addEventListener('keydown', event => {
+    event.stopPropagation();
+    if (event.key === 'Enter') commitRename(card.prefKey, input.value);
+    else if (event.key === 'Escape' && panelState) { panelState.editing = null; rerenderGrid(); }
+  });
+  input.addEventListener('blur', () => {
+    if (panelState?.editing === card.prefKey) commitRename(card.prefKey, input.value);
+  });
+  nameRow.appendChild(input);
+  setTimeout(() => { try { input.focus(); input.select(); } catch {} }, 0);
+}
+
+// --- BYOK provider sheet -----------------------------------------------------
+
+async function pickerPost(path, body) {
+  const res = await fetch(API_BASE + path, { method: 'POST',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && !data.error) return { error: 'http_' + res.status, message: '本地服务错误' };
+  return data;
+}
+
+async function removeByokModel(providerId, modelId) {
+  const res = await pickerPost('/picker/models/remove', { providerId, modelId })
+    .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
+  if (!panelState) return;
+  panelState.status = res.error ? (res.message || '移除失败') : '已移除模型，正在刷新…';
+  renderFoot();
+  if (!res.error) pollForRefresh();
+}
+
+// After a write, the catalog updates once config.json has propagated to the
+// host — poll until every BYOK uid is visible again (or ~10s pass).
+async function pollForRefresh() {
+  const deadline = Date.now() + 10000;
+  while (panelState && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await fetchState();
+    refreshLocated();
+    const visible = new Set((panelState?.located?.host?.visibleModelConfigs || []).map(model => model.modelUid));
+    if (!Object.keys(lastState?.byok || {}).some(uid => !visible.has(uid))) break;
+  }
+  if (!panelState) return;
+  panelState.status = '';
+  renderFoot();
+  rerenderGrid();
+}
+
+function openSheet(arg) {
+  if (!panel || !panelState) return;
+  closeMenu();
+  panelState.sheet = { mode: arg?.providerId ? 'edit' : 'add', providerId: arg?.providerId || null,
+    provider: null, step: 'form', error: '', busy: false, list: [], token: '',
+    checked: new Set(), search: '', confirmDelete: false };
+  renderSheet();
+  if (arg?.providerId) {
+    fetch(API_BASE + '/picker/providers').then(res => res.json()).then(data => {
+      const sheet = panelState?.sheet;
+      if (!sheet || sheet.providerId !== arg.providerId) return;
+      sheet.provider = (data.providers || []).find(item => item.id === sheet.providerId) || null;
+      if (!sheet.provider) sheet.error = '供应商已不存在';
+      renderSheet();
+    }).catch(() => {
+      if (panelState?.sheet) { panelState.sheet.error = '本地服务未就绪'; renderSheet(); }
+    });
+  }
+}
+function closeSheet() {
+  if (!panelState) return;
+  panelState.sheet = null;
+  panel.querySelector('.dmp-sheet')?.remove();
+}
+
+function renderSheet() {
+  const sheet = panelState?.sheet;
+  panel?.querySelector('.dmp-sheet')?.remove();
+  if (!panel || !sheet) return;
+  const wrap = el('div', 'dmp-sheet');
+  const head = el('div', 'dmp-sheet-head', sheet.mode === 'edit' ? '管理供应商' : '添加供应商');
+  const x = el('button', 'dmp-sheet-x', '×');
+  x.addEventListener('click', event => { event.stopPropagation(); closeSheet(); });
+  head.appendChild(x);
+  wrap.appendChild(head);
+  const body = el('div', 'dmp-sheet-body');
+  wrap.appendChild(body);
+  const foot = el('div', 'dmp-sheet-foot');
+  wrap.appendChild(foot);
+  if (sheet.step === 'form') renderSheetForm(body, foot, sheet);
+  else renderSheetList(body, foot, sheet);
+  if (sheet.error) body.appendChild(el('div', 'dmp-err', sheet.error));
+  panel.appendChild(wrap);
+}
+
+function renderSheetForm(body, foot, sheet) {
+  const p = sheet.provider || {};
+  const mk = (labelText, type, value, placeholder) => {
+    body.appendChild(el('label', 'dmp-lab', labelText));
+    const input = el('input', '');
+    input.type = type;
+    input.value = value;
+    if (placeholder) input.placeholder = placeholder;
+    body.appendChild(input);
+    return input;
+  };
+  const fields = {
+    name: mk('名称', 'text', p.name || ''),
+    url: mk('API 地址', 'text', p.baseUrl || ''),
+    key: mk('API Key', 'password', '', sheet.mode === 'edit' ? '留空则保持不变' : ''),
+  };
+  body.appendChild(el('label', 'dmp-lab', '接口类型'));
+  const format = el('select', '');
+  for (const [value, label] of [['openai-responses', 'OpenAI Responses'],
+    ['openai-chat', 'OpenAI Chat'], ['anthropic', 'Anthropic']]) {
+    const option = el('option', '', label);
+    option.value = value;
+    if ((p.apiFormat || 'openai-responses') === value) option.selected = true;
+    format.appendChild(option);
+  }
+  body.appendChild(format);
+  if (sheet.mode === 'edit') {
+    const del = el('button', 'dmp-btn danger', sheet.confirmDelete ? '确认删除' : '删除供应商');
+    del.disabled = sheet.busy;
+    del.addEventListener('click', () => {
+      if (!sheet.confirmDelete) { sheet.confirmDelete = true; renderSheet(); return; }
+      (async () => {
+        sheet.busy = true; renderSheet();
+        const res = await pickerPost('/picker/providers/delete', { id: sheet.providerId })
+          .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
+        closeSheet();
+        if (!panelState) return;
+        panelState.status = res.error ? (res.message || '删除失败') : '已删除供应商，正在刷新…';
+        renderFoot();
+        if (!res.error) pollForRefresh();
+      })();
+    });
+    foot.appendChild(del);
+  }
+  const save = el('button', 'dmp-btn', sheet.busy ? '获取中…' : '保存并获取模型');
+  save.disabled = sheet.busy;
+  save.addEventListener('click', () => {
+    const values = { name: fields.name.value, baseUrl: fields.url.value,
+      apiKey: fields.key.value, apiFormat: format.value };
+    (async () => {
+      sheet.busy = true; sheet.error = ''; renderSheet();
+      const saved = await pickerPost('/picker/providers/save', {
+        id: sheet.providerId || undefined, ...values, apiKey: values.apiKey || undefined })
+        .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
+      if (saved.error) { sheet.busy = false; sheet.error = saved.message || '保存失败'; renderSheet(); return; }
+      sheet.providerId = saved.id;
+      sheet.mode = 'edit';
+      const dis = await pickerPost('/picker/providers/discover', { id: saved.id })
+        .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
+      sheet.busy = false;
+      if (dis.error) { sheet.error = dis.message || '获取模型失败'; renderSheet(); return; }
+      sheet.token = dis.token;
+      sheet.list = dis.models || [];
+      sheet.checked = new Set(sheet.list.filter(model => model.imported).map(model => model.id));
+      sheet.step = 'list';
+      renderSheet();
+    })();
+  });
+  foot.appendChild(save);
+}
+
+function renderSheetList(body, foot, sheet) {
+  const tools = el('div', '');
+  tools.style.cssText = 'display:flex;gap:6px;align-items:center';
+  const search = el('input', '');
+  search.type = 'text';
+  search.placeholder = '筛选模型';
+  search.value = sheet.search;
+  tools.appendChild(search);
+  const models = el('div', 'dmp-models');
+  const fill = () => {
+    models.replaceChildren();
+    const norm = filterNorm(sheet.search);
+    for (const model of sheet.list) {
+      if (norm && !filterNorm(model.id + ' ' + (model.label || '')).includes(norm)) continue;
+      const row = el('label', 'dmp-model');
+      const cb = el('input', '');
+      cb.type = 'checkbox';
+      cb.checked = sheet.checked.has(model.id);
+      cb.addEventListener('change', () => {
+        if (cb.checked) sheet.checked.add(model.id); else sheet.checked.delete(model.id);
+      });
+      row.appendChild(cb);
+      row.appendChild(el('span', '', model.label || model.id));
+      const meta = [
+        model.contextWindow ? Math.round(model.contextWindow / 1000) + 'k' : null,
+        ...(model.efforts || []),
+      ].filter(Boolean).join(' · ');
+      if (meta) row.appendChild(el('span', 'meta', meta));
+      models.appendChild(row);
+    }
+    if (!models.childNodes.length) models.appendChild(el('div', 'dmp-empty', '没有匹配的模型'));
+  };
+  search.addEventListener('input', () => { sheet.search = search.value; fill(); });
+  const all = el('button', 'dmp-btn sec', '全选');
+  all.addEventListener('click', () => { for (const model of sheet.list) sheet.checked.add(model.id); fill(); });
+  const none = el('button', 'dmp-btn sec', '全不选');
+  none.addEventListener('click', () => { sheet.checked.clear(); fill(); });
+  tools.appendChild(all);
+  tools.appendChild(none);
+  body.appendChild(tools);
+  body.appendChild(models);
+  fill();
+  const refetch = el('button', 'dmp-btn sec', '重新获取');
+  refetch.disabled = sheet.busy;
+  refetch.addEventListener('click', () => {
+    (async () => {
+      sheet.busy = true; sheet.error = ''; renderSheet();
+      const dis = await pickerPost('/picker/providers/discover', { id: sheet.providerId })
+        .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
+      sheet.busy = false;
+      if (dis.error) { sheet.error = dis.message || '获取模型失败'; renderSheet(); return; }
+      sheet.token = dis.token;
+      sheet.list = dis.models || [];
+      for (const model of sheet.list) if (model.imported) sheet.checked.add(model.id);
+      renderSheet();
+    })();
+  });
+  foot.appendChild(refetch);
+  const imp = el('button', 'dmp-btn', sheet.busy ? '导入中…' : '导入');
+  imp.disabled = sheet.busy;
+  imp.addEventListener('click', () => {
+    (async () => {
+      sheet.busy = true; sheet.error = ''; renderSheet();
+      const ids = [...sheet.checked];
+      const res = await pickerPost('/picker/providers/import',
+        { id: sheet.providerId, token: sheet.token, ids })
+        .catch(() => ({ error: 'service_unavailable', message: '本地服务未就绪' }));
+      if (res.error) { sheet.busy = false; sheet.error = res.message || '导入失败'; renderSheet(); return; }
+      closeSheet();
+      if (!panelState) return;
+      panelState.status = '已导入 ' + ids.length + ' 个模型，正在刷新…';
+      renderFoot();
+      pollForRefresh();
+    })();
+  });
+  foot.appendChild(imp);
+}
+
 function chooseFamily(card, located) {
   const saved = savedProviders();
   const wanted = saved[card.cardKey];
@@ -687,6 +1183,7 @@ function buildCard(card, index, located) {
   const enabledVariants = family.variants.filter(variant => !variant.disabled);
   const cardDisabled = enabledVariants.length === 0;
   if (cardDisabled) { node.classList.add('dmp-off'); node.title = family.variants[0]?.disabledReason || ''; }
+  if (card.hidden) node.classList.add('dmp-hid');
   const live = family.variants.find(variant => variant.uid === value);
   const cardState = cardStateFor(card, family);
   if (live) {
@@ -701,18 +1198,23 @@ function buildCard(card, index, located) {
   dot.style.background = VENDORS[family.vendor] || VENDORS.other;
   top.appendChild(dot);
   if (family.free) top.appendChild(el('span', 'dmp-free', '免费'));
+  if (card.favorite) top.appendChild(el('span', 'dmp-star', '★'));
   const chip = el('button', 'dmp-prov', family.providerName || 'Devin');
   chip.title = card.families.length > 1 ? '切换供应商' : '';
   top.appendChild(chip);
   node.appendChild(top);
 
+  const displayName = prefAlias(card.prefKey) || card.name;
   const nameRow = el('div');
-  const nameSize = card.name.length <= 6 ? 22 : card.name.length <= 8 ? 19 : 16;
-  const nameEl = el('span', 'dmp-name', card.name);
-  nameEl.style.fontSize = nameSize + 'px';
-  nameRow.appendChild(nameEl);
-  if (card.version) nameRow.appendChild(el('span', 'dmp-ver', card.version));
-  if (card.variant) nameRow.appendChild(el('span', 'dmp-var', card.variant));
+  const nameSize = displayName.length <= 6 ? 22 : displayName.length <= 8 ? 19 : 16;
+  if (panelState.editing === card.prefKey) renameField(card, nameRow);
+  else {
+    const nameEl = el('span', 'dmp-name', displayName);
+    nameEl.style.fontSize = nameSize + 'px';
+    nameRow.appendChild(nameEl);
+    if (card.version) nameRow.appendChild(el('span', 'dmp-ver', card.version));
+    if (card.variant) nameRow.appendChild(el('span', 'dmp-var', card.variant));
+  }
   node.appendChild(nameRow);
 
   const sub = el('div', 'dmp-sub');
@@ -761,18 +1263,26 @@ function buildCard(card, index, located) {
       document.addEventListener('pointerdown', dismiss, true);
     });
   }
+  const resolveUid = () => {
+    const order = cardState.effortOrder ?? defaultVariant(family)?.effortOrder ?? null;
+    const target = (order != null ? matchVariant(family, order, cardState.toggles) : null) || defaultVariant(family);
+    return target?.uid || null;
+  };
   if (!cardDisabled) {
     node.addEventListener('click', () => {
+      if (panelState?.suppressClick || panelState?.editing === card.prefKey) return;
       const order = cardState.effortOrder ?? defaultVariant(family)?.effortOrder ?? null;
       const target = (order != null ? matchVariant(family, order, cardState.toggles) : null) || defaultVariant(family);
       if (target && !target.disabled) selectModel(target.uid);
     });
   }
+  wireCardChrome(node, card, index, resolveUid);
   return node;
 }
 
 function buildFusionCard(card, index, located, state) {
   const node = el('div', 'dmp-card');
+  node.setAttribute('data-dmp-key', card.cardKey);
   const slots = panelState.fusionSlots;
   const other = panelState.activeSlot === 'lead' ? slots.sidekick : slots.lead;
   const otherKey = underlyingKey(other, state?.fusionCandidates);
@@ -780,21 +1290,27 @@ function buildFusionCard(card, index, located, state) {
   const blocked = other && cardKeys.includes(otherKey);
   const selectedRefs = [slots.lead, slots.sidekick].filter(Boolean).map(ref => ref.kind + ':' + ref.uid);
   if (blocked) { node.classList.add('dmp-off'); node.title = '两个槽位不能使用同一模型'; }
+  if (card.hidden) node.classList.add('dmp-hid');
 
   const top = el('div', 'dmp-top');
   top.appendChild(el('span', 'dmp-idx', String(index + 1).padStart(2, '0')));
   const dot = el('span', 'dmp-dot');
   dot.style.background = VENDORS[card.vendor] || VENDORS.other;
   top.appendChild(dot);
+  if (card.favorite) top.appendChild(el('span', 'dmp-star', '★'));
   top.appendChild(el('span', 'dmp-prov', card.providerName || 'Devin'));
   node.appendChild(top);
+  const displayName = prefAlias(card.prefKey) || card.name;
   const nameRow = el('div');
-  const nameSize = card.name.length <= 6 ? 22 : card.name.length <= 8 ? 19 : 16;
-  const nameEl = el('span', 'dmp-name', card.name);
-  nameEl.style.fontSize = nameSize + 'px';
-  nameRow.appendChild(nameEl);
-  if (card.version) nameRow.appendChild(el('span', 'dmp-ver', card.version));
-  if (card.variant) nameRow.appendChild(el('span', 'dmp-var', card.variant));
+  const nameSize = displayName.length <= 6 ? 22 : displayName.length <= 8 ? 19 : 16;
+  if (panelState.editing === card.prefKey) renameField(card, nameRow);
+  else {
+    const nameEl = el('span', 'dmp-name', displayName);
+    nameEl.style.fontSize = nameSize + 'px';
+    nameRow.appendChild(nameEl);
+    if (card.version) nameRow.appendChild(el('span', 'dmp-ver', card.version));
+    if (card.variant) nameRow.appendChild(el('span', 'dmp-var', card.variant));
+  }
   node.appendChild(nameRow);
   const sub = el('div', 'dmp-sub');
   sub.appendChild(el('span', 'dmp-sub-txt', (card.familyLabel || card.name) + ' · ' + (card.providerName || 'Devin')));
@@ -844,11 +1360,15 @@ function buildFusionCard(card, index, located, state) {
     }
     node.appendChild(eff);
   }
-  if (!blocked) node.addEventListener('click', () =>
-    fill((cardState.effortOrder != null ? matchVariant(card, cardState.effortOrder, cardState.toggles) : null) || defaultVariant(card)));
+  if (!blocked) node.addEventListener('click', () => {
+    if (panelState?.suppressClick || panelState?.editing === card.prefKey) return;
+    fill((cardState.effortOrder != null ? matchVariant(card, cardState.effortOrder, cardState.toggles) : null) || defaultVariant(card));
+  });
   if (selectedRefs.length && card.variants.some(variant => selectedRefs.includes(variant.ref.kind + ':' + variant.ref.uid))) {
     node.classList.add('dmp-sel');
   }
+  wireCardChrome(node, card, index, () =>
+    (matchVariant(card, cardState.effortOrder ?? null, cardState.toggles) || defaultVariant(card))?.ref?.uid || null);
   return node;
 }
 
@@ -881,31 +1401,67 @@ function rerenderGrid() {
     if (slotRowEl) slotRowEl.replaceChildren(slotChip('lead', '主模型'), slotChip('sidekick', '辅助模型'));
     const oldApply = panel.querySelector('.dmp-apply'); if (oldApply) oldApply.remove();
     const oldErr = panel.querySelector('.dmp-err'); if (oldErr) oldErr.remove();
-    if (!lastState) { grid.appendChild(el('div', 'dmp-empty', '本地服务未就绪')); renderFusionFooter(); return; }
+    if (!lastState) { grid.appendChild(el('div', 'dmp-empty', '本地服务未就绪')); renderFoot(); return; }
     const nativeIndex = new Map(models.map(model => [model.modelUid, model]));
     const active = panelState.activeSlot === 'lead' ? 'leads' : 'sidekicks';
     const cards = groupFusion(lastState.fusionCandidates?.[active] || [], nativeIndex);
+    panelState.fullKeys = arrangeCards(cards, panelState.prefs, true).map(card => card.prefKey);
+    const arranged = arrangeCards(cards, panelState.prefs, panelState.showHidden);
+    const rendered = [];
     let shown = 0;
-    cards.forEach((card, index) => {
-      if (!filterMatch(panelState.filter, [card.name, card.variant, card.providerName, card.cardKey])) return;
+    arranged.forEach(card => {
+      if (!filterMatch(panelState.filter, [card.name, prefAlias(card.prefKey), card.variant, card.providerName, card.cardKey])) return;
+      rendered.push(card);
       grid.appendChild(buildFusionCard(card, shown++, located, lastState));
     });
+    panelState.visibleCards = rendered;
     if (!shown) grid.appendChild(el('div', 'dmp-empty',
       cards.length ? '没有匹配的模型' : '暂无可用的 Fusion 模型'));
-    renderFusionFooter();
+    renderFoot();
     return;
   }
   const oldApply = panel.querySelector('.dmp-apply'); if (oldApply) oldApply.remove();
   const oldErr = panel.querySelector('.dmp-err'); if (oldErr) oldErr.remove();
   const cards = groupCards(models, lastState);
+  panelState.fullKeys = arrangeCards(cards, panelState.prefs, true).map(card => card.prefKey);
+  const arranged = arrangeCards(cards, panelState.prefs, panelState.showHidden);
+  const rendered = [];
   let shown = 0;
-  cards.forEach(card => {
-    const hay = [card.name, card.version, card.variant, card.cardKey,
+  arranged.forEach(card => {
+    const hay = [card.name, prefAlias(card.prefKey), card.version, card.variant, card.cardKey,
       ...card.families.flatMap(family => [family.providerName, ...family.variants.map(variant => variant.uid + ' ' + variant.label)])];
     if (!filterMatch(panelState.filter, hay)) return;
+    rendered.push(card);
     grid.appendChild(buildCard(card, shown++, located));
   });
+  panelState.visibleCards = rendered;
   if (!shown) grid.appendChild(el('div', 'dmp-empty', '没有匹配的模型'));
+  const add = el('div', 'dmp-card dmp-add', '+ 添加供应商');
+  add.addEventListener('click', () => { if (!panelState?.suppressClick) openSheet(null); });
+  grid.appendChild(add);
+  renderFoot();
+}
+
+// Footer: hidden-card toggle + status/hint, then the fusion apply button.
+function renderFoot() {
+  const foot = panel?.querySelector('.dmp-foot');
+  if (!foot || !panelState) return;
+  while (foot.firstChild) foot.removeChild(foot.firstChild);
+  const hiddenSet = new Set(panelState.prefs.hidden || []);
+  const hiddenCount = (panelState.fullKeys || []).filter(key => hiddenSet.has(key)).length;
+  if (hiddenCount > 0) {
+    const btn = el('button', 'dmp-showhidden',
+      (panelState.showHidden ? '收起已隐藏' : '显示已隐藏') + ' (' + hiddenCount + ')');
+    btn.addEventListener('click', event => {
+      event.stopPropagation();
+      panelState.showHidden = !panelState.showHidden;
+      rerenderGrid();
+    });
+    foot.appendChild(btn);
+  }
+  foot.appendChild(el('span', panelState.status ? 'dmp-status' : '',
+    panelState.status || '输入即可筛选 · Alt+点击打开原生菜单'));
+  if (panelState.mode === 'fusion') renderFusionFooter();
 }
 
 function renderFusionFooter() {
@@ -960,7 +1516,9 @@ function openPanel(trigger, located) {
   const startsFusion = typeof value === 'string' && value.startsWith('fusion-');
   panelState = { trigger, located, mode: startsFusion ? 'fusion' : 'single', filter: '',
     value, activeSlot: 'lead', cardStates: new Map(),
-    fusionSlots: { lead: null, sidekick: null } };
+    fusionSlots: { lead: null, sidekick: null },
+    prefs: loadPrefs(), showHidden: false, menu: null, editing: null,
+    dragIndex: null, suppressClick: false, sheet: null, status: '' };
   panel = el('div', 'dmp-panel' + (isDark(trigger) ? ' dmp-dark' : ' dmp-light'));
   panel.setAttribute('data-devin-zh-skip', '');
   const toolbar = el('div', 'dmp-toolbar');
@@ -990,7 +1548,9 @@ function openPanel(trigger, located) {
   const syncSlots = () => { slotRow.style.display = panelState.mode === 'fusion' ? '' : 'none'; };
   btnSingle.addEventListener('click', syncSlots);
   btnFusion.addEventListener('click', syncSlots);
-  panel.appendChild(el('div', 'dmp-grid'));
+  const grid = el('div', 'dmp-grid');
+  grid.addEventListener('scroll', closeMenu);
+  panel.appendChild(grid);
   const foot = el('div', 'dmp-foot', '输入即可筛选 · Alt+点击打开原生菜单');
   panel.appendChild(foot);
   document.body.appendChild(panel);
@@ -1008,18 +1568,30 @@ function openPanel(trigger, located) {
   setTimeout(() => { if (panel) filter.focus(); }, 30);
 
   const onDocDown = event => {
-    if (panel && !panel.contains(event.target) && event.target !== trigger && !trigger.contains(event.target)) closePanel();
+    if (!panel) return;
+    if (panelState?.menu && !panelState.menu.contains(event.target)) closeMenu();
+    if (!panel.contains(event.target) && event.target !== trigger && !trigger.contains(event.target)) closePanel();
   };
   const onKey = event => {
     if (!panelState) return;
     if (event.key === 'Escape') {
-      if (panelState.filter) { panelState.filter = ''; filter.value = ''; rerenderGrid(); }
+      // Innermost first: menu → inline rename → provider sheet → filter → panel.
+      if (panelState.menu) closeMenu();
+      else if (panelState.editing) { panelState.editing = null; rerenderGrid(); }
+      else if (panelState.sheet) closeSheet();
+      else if (panelState.filter) { panelState.filter = ''; filter.value = ''; rerenderGrid(); }
       else closePanel();
       event.stopPropagation();
-    } else if (event.key === 'Enter' && document.activeElement !== filter) {
-      const first = panel.querySelector('.dmp-card:not(.dmp-off)');
+      return;
+    }
+    const active = document.activeElement;
+    if (panelState.sheet || panelState.menu) return;
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
+      || active.tagName === 'SELECT' || active.isContentEditable)) return;
+    if (event.key === 'Enter') {
+      const first = panel.querySelector('.dmp-card:not(.dmp-off):not(.dmp-add):not(.dmp-hid)');
       if (first) first.click();
-    } else if (event.key.length === 1 && document.activeElement !== filter && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    } else if (event.key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey) {
       filter.focus();
     }
   };

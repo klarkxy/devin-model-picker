@@ -246,3 +246,86 @@ test('picker.js never uses CSP-forbidden DOM APIs', () => {
     assert.equal(source.includes(banned), false, banned);
   }
 });
+
+test('sanitizePrefs normalizes arrays, dedupes, and caps aliases at 40 chars', () => {
+  const prefs = picker.sanitizePrefs({
+    order: ['a', 'b', 'a', 7, '', 'c'],
+    favorites: ['a', 'a'],
+    hidden: 'nope',
+    aliases: { x: '  Alias  ', y: 42, z: 'q'.repeat(60), empty: '   ' },
+  });
+  assert.deepEqual(prefs.order, ['a', 'b', 'c']);
+  assert.deepEqual(prefs.favorites, ['a']);
+  assert.deepEqual(prefs.hidden, []);
+  assert.equal(prefs.aliases.x, 'Alias');
+  assert.equal(prefs.aliases.z.length, 40);
+  assert.ok(!('y' in prefs.aliases) && !('empty' in prefs.aliases));
+  assert.deepEqual(picker.sanitizePrefs(null), { order: [], favorites: [], hidden: [], aliases: {} });
+  assert.deepEqual(picker.sanitizePrefs('junk'), { order: [], favorites: [], hidden: [], aliases: {} });
+});
+
+test('arrangeCards: order ranks first, unknowns keep catalog order, favorites front, hidden out', () => {
+  const mk = prefKey => ({ prefKey });
+  const cards = [mk('a'), mk('b'), mk('c'), mk('d'), mk('e')];
+  const prefs = { order: ['d', 'b'], favorites: ['e'], hidden: ['c'], aliases: {} };
+  const out = picker.arrangeCards(cards, prefs, false);
+  assert.deepEqual(out.map(c => c.prefKey), ['e', 'd', 'b', 'a'],
+    'favorite e front, then ordered d b, then catalog a (c hidden)');
+  const withHidden = picker.arrangeCards(cards, prefs, true);
+  assert.deepEqual(withHidden.map(c => c.prefKey), ['e', 'd', 'b', 'a', 'c'],
+    'hidden card keeps its arranged position when shown');
+  assert.equal(withHidden.at(-1).hidden, true);
+  assert.equal(out[0].favorite, true);
+  // New/unknown cards append in catalog order at the end.
+  const grown = picker.arrangeCards([mk('a'), mk('z'), mk('b')], { order: ['b'], favorites: [], hidden: [], aliases: {} }, false);
+  assert.deepEqual(grown.map(c => c.prefKey), ['b', 'a', 'z']);
+});
+
+test('applyCardDrop covers the three zones', () => {
+  const keys = ['a', 'b', 'c', 'd'];
+  assert.deepEqual(picker.applyCardDrop(keys, 0, 2, 'before'), ['b', 'a', 'c', 'd']);
+  assert.deepEqual(picker.applyCardDrop(keys, 0, 2, 'after'), ['b', 'c', 'a', 'd']);
+  assert.deepEqual(picker.applyCardDrop(keys, 0, 2, 'swap'), ['c', 'b', 'a', 'd']);
+  assert.deepEqual(picker.applyCardDrop(keys, 3, 0, 'before'), ['d', 'a', 'b', 'c']);
+  assert.deepEqual(picker.applyCardDrop(keys, 1, 1, 'before'), keys, 'self drop is a no-op');
+  assert.deepEqual(picker.applyCardDrop(keys, 9, 1, 'before'), keys, 'out of range is a no-op');
+});
+
+test('dropModeFromRatio maps pointer position to zones', () => {
+  assert.equal(picker.dropModeFromRatio(0.1), 'before');
+  assert.equal(picker.dropModeFromRatio(0.5), 'swap');
+  assert.equal(picker.dropModeFromRatio(0.9), 'after');
+});
+
+test('moveCardKey and toggleKey update key lists', () => {
+  assert.deepEqual(picker.moveCardKey(['a', 'b', 'c'], 'c', 'first'), ['c', 'a', 'b']);
+  assert.deepEqual(picker.moveCardKey(['a', 'b', 'c'], 'a', 'last'), ['b', 'c', 'a']);
+  assert.deepEqual(picker.moveCardKey(['a', 'b'], 'z', 'first'), ['a', 'b'], 'absent key unchanged');
+  assert.deepEqual(picker.toggleKey(['a', 'b'], 'c'), ['a', 'b', 'c']);
+  assert.deepEqual(picker.toggleKey(['a', 'b'], 'a'), ['b']);
+});
+
+test('mergeSubsetOrder folds a reordered visible subset back into the full order', () => {
+  const full = ['a', 'b', 'c', 'd', 'e'];
+  const visible = ['b', 'd', 'e'];           // user reorders only these
+  assert.deepEqual(picker.mergeSubsetOrder(full, ['e', 'b', 'd']), ['a', 'e', 'c', 'b', 'd']);
+});
+
+test('fusion cards expose a canonical prefKey shared with single mode', () => {
+  const candidates = [
+    { ref: { kind: 'native', uid: 'opus-low' }, label: 'Claude Opus 5.5', providerName: 'Devin',
+      familyKey: 'fam-opus', familyLabel: 'Claude Opus 5.5', effort: 'low', effortOrder: 1 },
+    { ref: { kind: 'native', uid: 'opus-high' }, label: 'Claude Opus 5.5', providerName: 'Devin',
+      familyKey: 'fam-opus', familyLabel: 'Claude Opus 5.5', effort: 'high', effortOrder: 3 },
+  ];
+  const fusion = picker.groupFusion(candidates, new Map());
+  assert.equal(fusion.length, 1);
+  assert.equal(fusion[0].prefKey, 'opus|5.5|', 'prefKey = single-mode cardKey');
+  assert.notEqual(fusion[0].prefKey, fusion[0].cardKey, 'internal cardKey stays separate');
+  // The same model in single mode produces the identical key.
+  const single = picker.groupCards([
+    { modelUid: 'opus-high', label: 'Claude Opus 5.5 High', familyUid: 'fam-opus',
+      familyLabel: 'Claude Opus 5.5', familyMetadata: { Effort: { order: 3, name: 'High' } } },
+  ], {});
+  assert.equal(single[0].prefKey, fusion[0].prefKey, 'prefs apply across both modes');
+});

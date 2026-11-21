@@ -24,7 +24,7 @@ npm run package   # node scripts/package.cjs → devin-model-picker-<version>.vs
 
 ## Invariants
 
-- BYOK uids `dmp-*`, fusion uids `fusion-dmp-a|b`; secrets never appear in catalog or `/picker/*` responses
+- BYOK uids `dmp-*`, fusion uids `fusion-dmp-a|b`; secrets never appear in catalog or `/picker/*` responses; `/picker/providers` returns baseUrl without userinfo/query
 - Backend re-reads `config.json` and rebuilds the catalog on every request
 - Injection only ever touches our own tag/file; never modify the real Devin install in tests
 

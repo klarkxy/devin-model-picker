@@ -150,3 +150,114 @@ test('/picker/fusion returns 503 while the extension is disabled', async t => {
     body: JSON.stringify({ lead: { kind: 'native', uid: 'x' }, sidekick: { kind: 'native', uid: 'y' } }) });
   assert.equal(res.status, 503);
 });
+
+// --- BYOK provider endpoints -------------------------------------------------
+
+test('/picker/providers lists providers, strips baseUrl userinfo/query, never leaks apiKey', async t => {
+  const f = await fixture(t, { providers: [
+    { id: 'p1', name: 'Magpie', baseUrl: 'https://user:pass@p.invalid/v1?q=1#frag',
+      apiFormat: 'openai', apiKey: 'fixture-secret', models: [{ id: 'm1', label: 'M1' }] },
+    { id: 'p2', name: 'NoKey', baseUrl: 'https://clean.invalid', apiFormat: 'anthropic', models: [] },
+  ] });
+  for (const headers of [{}, { origin: 'https://evil.invalid' }]) {
+    assert.equal((await fetch(f.base + '/picker/providers', { headers })).status, 403, JSON.stringify(headers));
+  }
+  const res = await fetch(f.base + '/picker/providers', { headers: { origin: ORIGIN } });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.providers.length, 2);
+  const p1 = body.providers[0];
+  assert.equal(p1.baseUrl, 'https://p.invalid/v1', 'userinfo/query/hash stripped');
+  assert.equal(p1.keyConfigured, true);
+  assert.equal(p2key(body), false, 'unconfigured key reported');
+  assert.deepEqual(p1.models, [{ id: 'm1', label: 'M1' }]);
+  const raw = JSON.stringify(body);
+  assert.ok(!raw.includes('fixture-secret') && !raw.includes('apiKey') && !raw.includes('user:pass'), 'no secrets');
+});
+function p2key(body) { return body.providers[1].keyConfigured; }
+
+test('/picker/providers/save creates and edits, delete removes, config.json is written', async t => {
+  const f = await fixture(t, { providers: [] });
+  const post = (path, body) => fetch(f.base + path, { method: 'POST',
+    headers: { origin: ORIGIN, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const created = await (await post('/picker/providers/save',
+    { name: 'Magpie', baseUrl: 'https://api.example.com/v1', apiFormat: 'openai', apiKey: 'sk-x' })).json();
+  assert.ok(created.id);
+  const onDisk = JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8'));
+  assert.equal(onDisk.providers.length, 1);
+  assert.equal(onDisk.providers[0].apiKey, 'sk-x', 'key stored in config, never returned');
+  // Edit without apiKey keeps the stored key.
+  const edited = await post('/picker/providers/save',
+    { id: created.id, name: 'Magpie 2', baseUrl: 'https://api2.example.com', apiFormat: 'anthropic' });
+  assert.equal(edited.status, 200);
+  const onDisk2 = JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8'));
+  assert.equal(onDisk2.providers[0].apiKey, 'sk-x');
+  assert.equal(onDisk2.providers[0].apiFormat, 'anthropic');
+  // Validation error → 400 + Chinese message.
+  const bad = await post('/picker/providers/save', { name: 'X', baseUrl: 'not-a-url', apiFormat: 'openai' });
+  assert.equal(bad.status, 400);
+  const badBody = await bad.json();
+  assert.equal(badBody.error, 'invalid_input');
+  assert.match(badBody.message, /地址|无效|填写/);
+  // Delete.
+  assert.equal((await post('/picker/providers/delete', { id: created.id })).status, 200);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8')).providers.length, 0);
+  assert.equal((await post('/picker/providers/delete', { id: 'ghost' })).status, 400);
+});
+
+test('/picker/models/remove drops the model from the provider', async t => {
+  const f = await fixture(t, { providers: providers() });
+  const res = await fetch(f.base + '/picker/models/remove', { method: 'POST',
+    headers: { origin: ORIGIN, 'content-type': 'application/json' },
+    body: JSON.stringify({ providerId: 'p', modelId: 'm1' }) });
+  assert.equal(res.status, 200);
+  const onDisk = JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8'));
+  assert.deepEqual(onDisk.providers[0].models.map(model => model.id), ['m2']);
+  const bad = await fetch(f.base + '/picker/models/remove', { method: 'POST',
+    headers: { origin: ORIGIN, 'content-type': 'application/json' },
+    body: JSON.stringify({ providerId: 'ghost', modelId: 'm1' }) });
+  assert.equal(bad.status, 400);
+});
+
+// Direct handlePickerRequest with a stubbed discover — no real network.
+function fakeRequest(body) {
+  return { method: 'POST', async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(body)); } };
+}
+function fakeResponse() {
+  return { status: 0, body: null, writeHead(status) { this.status = status; },
+    end(payload) { this.body = payload ? JSON.parse(payload) : null; } };
+}
+
+test('discover→import flow: pending token validates and provider edits invalidate it', async t => {
+  const { handlePickerRequest } = require('../src/picker-api.cjs');
+  const config = { providers: [{ id: 'p1', name: 'P', baseUrl: 'https://p.invalid',
+    apiFormat: 'openai', apiKey: 'sk-x', models: [] }] };
+  const ctx = { config, configFile: '/dev/null', writeConfig: (file, next) => { Object.assign(config, next); },
+    discover: async () => [{ id: 'm1', label: 'Model 1' }, { id: 'm2' }],
+    modelsDevIndex: async () => null, pendingDiscovers: new Map() };
+  const call = async (path, body) => {
+    const res = fakeResponse();
+    await handlePickerRequest(fakeRequest(body), res, path, ctx);
+    return res;
+  };
+  const dis = await call('/picker/providers/discover', { id: 'p1' });
+  assert.equal(dis.status, 200);
+  assert.ok(dis.body.token);
+  assert.deepEqual(dis.body.models.map(model => model.id), ['m1', 'm2']);
+  assert.ok(dis.body.models.every(model => model.imported === false));
+  const imp = await call('/picker/providers/import', { id: 'p1', token: dis.body.token, ids: ['m1'] });
+  assert.equal(imp.status, 200);
+  assert.deepEqual(config.providers[0].models.map(model => model.id), ['m1']);
+  // Editing the provider (baseUrl change) invalidates the pending token.
+  const save = await call('/picker/providers/save', { id: 'p1', name: 'P', baseUrl: 'https://p2.invalid', apiFormat: 'openai' });
+  assert.equal(save.status, 200);
+  const stale = await call('/picker/providers/import', { id: 'p1', token: dis.body.token, ids: ['m2'] });
+  assert.equal(stale.status, 400);
+  assert.match(stale.body.message, /失效|重新/);
+  // Discover upstream failure → 502.
+  ctx.discover = async () => { throw new Error('boom'); };
+  const failed = await call('/picker/providers/discover', { id: 'p1' });
+  assert.equal(failed.status, 502);
+  assert.equal(failed.body.error, 'discover_failed');
+  assert.ok(!JSON.stringify(failed.body).includes('sk-x'), 'errors never echo the key');
+});

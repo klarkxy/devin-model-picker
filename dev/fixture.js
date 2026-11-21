@@ -65,14 +65,108 @@
       fusionCandidates: { leads, sidekicks } };
     let slotToggle = 'a';
     const effectiveState = window.DMP_STATE_OVERRIDE || state;
+    effectiveState.byok = effectiveState.byok || {};
+    // Fake provider store backing /picker/providers* — mirrors the backend API.
+    const fakeProviders = window.DMP_FAKE_PROVIDERS = window.DMP_FAKE_PROVIDERS || [];
+    for (const entry of Object.values(effectiveState.byok || {})) {
+      let provider = fakeProviders.find(item => item.id === entry.providerId);
+      if (!provider) {
+        provider = { id: entry.providerId, name: entry.providerName,
+          baseUrl: 'https://' + entry.providerId + '.invalid/v1', apiFormat: 'openai',
+          apiKey: 'sk-' + entry.providerId, models: [] };
+        fakeProviders.push(provider);
+      }
+      if (!provider.models.some(item => item.id === entry.modelId)) {
+        provider.models.push({ id: entry.modelId, label: entry.providerName + ' · ' + entry.modelId });
+      }
+    }
+    window.DMP_DISCOVER_MODELS = window.DMP_DISCOVER_MODELS || [
+      { id: 'harness-alpha', label: 'Harness Alpha', contextWindow: 256000, efforts: [null, 'high'], supportsImages: true },
+      { id: 'harness-beta', label: 'Harness Beta', contextWindow: 128000, efforts: [null, 'medium', 'high'] },
+      { id: 'harness-gamma', label: 'Harness Gamma', contextWindow: 64000, efforts: [null] },
+    ];
+    const publicProviders = () => ({
+      providers: fakeProviders.map(({ apiKey, ...rest }) => ({ ...rest, keyConfigured: !!apiKey })),
+    });
+    const ok = body => new Response(JSON.stringify(body), { status: 200 });
+    const bad = message => new Response(JSON.stringify({ error: 'invalid_input', message }), { status: 400 });
     window.fetch = async (url, options = {}) => {
-      if (String(url).endsWith('/picker/state')) return new Response(JSON.stringify(effectiveState), { status: 200 });
-      if (String(url).endsWith('/picker/fusion')) {
+      const path = String(url);
+      if (path.endsWith('/picker/state')) return ok(effectiveState);
+      if (path.endsWith('/picker/fusion')) {
         const body = JSON.parse(options.body || '{}');
         const log = document.getElementById('dmp-harness-log');
         if (log) log.textContent += '\nPOST /picker/fusion ' + JSON.stringify(body);
         slotToggle = slotToggle === 'a' ? 'b' : 'a';
-        return new Response(JSON.stringify({ uid: 'fusion-dmp-' + slotToggle }), { status: 200 });
+        return ok({ uid: 'fusion-dmp-' + slotToggle });
+      }
+      if (path.endsWith('/picker/providers') && (options.method || 'GET') === 'GET') return ok(publicProviders());
+      if (path.endsWith('/picker/providers/save')) {
+        const body = JSON.parse(options.body || '{}');
+        if (!body.name || !body.baseUrl) return bad('请填写名称和 API 地址。');
+        if (body.id) {
+          const provider = fakeProviders.find(item => item.id === body.id);
+          if (!provider) return bad('该供应商已不存在。');
+          Object.assign(provider, { name: body.name, baseUrl: body.baseUrl, apiFormat: body.apiFormat });
+          if (body.apiKey) provider.apiKey = body.apiKey;
+          return ok({ id: provider.id });
+        }
+        const provider = { id: 'prov-' + (fakeProviders.length + 1), name: body.name,
+          baseUrl: body.baseUrl, apiFormat: body.apiFormat, apiKey: body.apiKey || '', models: [] };
+        fakeProviders.push(provider);
+        return ok({ id: provider.id });
+      }
+      if (path.endsWith('/picker/providers/discover')) {
+        const body = JSON.parse(options.body || '{}');
+        const provider = fakeProviders.find(item => item.id === body.id);
+        if (!provider) return bad('该供应商已不存在。');
+        return ok({ token: 'harness-token', models: window.DMP_DISCOVER_MODELS.map(model => ({
+          ...model, imported: provider.models.some(item => item.id === model.id) })) });
+      }
+      if (path.endsWith('/picker/providers/import')) {
+        const body = JSON.parse(options.body || '{}');
+        const provider = fakeProviders.find(item => item.id === body.id);
+        if (!provider) return bad('该供应商已不存在。');
+        for (const id of body.ids || []) {
+          const discovered = window.DMP_DISCOVER_MODELS.find(item => item.id === id);
+          if (!discovered) continue;
+          if (!provider.models.some(item => item.id === id)) {
+            provider.models.push({ id, label: provider.name + ' · ' + id });
+            const uid = 'dmp-' + provider.id + '-' + id + '-0';
+            effectiveState.byok[uid] = { uid, providerId: provider.id, providerName: provider.name,
+              modelId: id, label: provider.name + ' · ' + discovered.label, effort: null, efforts: discovered.efforts };
+            visibleModelConfigs.push({ modelUid: uid, label: provider.name + ' · ' + discovered.label,
+              familyUid: 'dmp-fam-' + provider.id + '-' + id, familyLabel: discovered.label });
+          }
+        }
+        return ok({ ok: true });
+      }
+      if (path.endsWith('/picker/providers/delete')) {
+        const body = JSON.parse(options.body || '{}');
+        const index = fakeProviders.findIndex(item => item.id === body.id);
+        if (index < 0) return bad('该供应商已不存在。');
+        fakeProviders.splice(index, 1);
+        for (const uid of Object.keys(effectiveState.byok)) {
+          if (effectiveState.byok[uid].providerId === body.id) delete effectiveState.byok[uid];
+        }
+        for (let i = visibleModelConfigs.length - 1; i >= 0; i--) {
+          if (effectiveState.byok[visibleModelConfigs[i].modelUid] === undefined && String(visibleModelConfigs[i].modelUid).startsWith('dmp-')) visibleModelConfigs.splice(i, 1);
+        }
+        return ok({ ok: true });
+      }
+      if (path.endsWith('/picker/models/remove')) {
+        const body = JSON.parse(options.body || '{}');
+        const provider = fakeProviders.find(item => item.id === body.providerId);
+        if (!provider) return bad('该供应商已不存在。');
+        provider.models = provider.models.filter(item => item.id !== body.modelId);
+        for (const uid of Object.keys(effectiveState.byok)) {
+          const entry = effectiveState.byok[uid];
+          if (entry.providerId === body.providerId && entry.modelId === body.modelId) delete effectiveState.byok[uid];
+        }
+        for (let i = visibleModelConfigs.length - 1; i >= 0; i--) {
+          if (String(visibleModelConfigs[i].modelUid).startsWith('dmp-' + body.providerId + '-' + body.modelId)) visibleModelConfigs.splice(i, 1);
+        }
+        return ok({ ok: true });
       }
       return new Response('{}', { status: 404 });
     };

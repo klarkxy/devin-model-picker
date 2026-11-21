@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { networkIdentity } = require('./backend-env.cjs');
-const { readConfig, writeConfig } = require('../config.cjs');
+const { readConfig, writeConfig, discover } = require('../config.cjs');
 const { buildCatalog, resolveAssignment } = require('../catalog.cjs');
+const { loadIndex } = require('../models-dev.cjs');
 const { PICKER_ORIGIN, corsHeaders, handlePickerRequest } = require('../picker-api.cjs');
 const wire = require('../protocol/wire.cjs');
 const { parseChat } = require('../protocol/chat.cjs');
@@ -16,7 +17,7 @@ const VERSION = require('../../package.json').version;
 const API_PREFIX = '/exa.api_server_pb.ApiServerService/';
 const SERVICE = 'devin-model-picker';
 const MANAGEMENT_PROTOCOL = 1;
-const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'backend-env.cjs', 'bridge.cjs', '../config.cjs', '../catalog.cjs', '../picker-api.cjs', '../model-capabilities.cjs', '../models-dev.cjs', '../protocol/wire.cjs', '../protocol/chat.cjs', '../protocol/responses.cjs', '../protocol/anthropic.cjs'];
+const SOURCE_FILES = ['../../package.json', 'backend.cjs', 'backend-env.cjs', 'bridge.cjs', '../config.cjs', '../catalog.cjs', '../picker-api.cjs', '../byok-ops.cjs', '../panel/base-url.cjs', '../model-capabilities.cjs', '../models-dev.cjs', '../protocol/wire.cjs', '../protocol/chat.cjs', '../protocol/responses.cjs', '../protocol/anthropic.cjs'];
 function sourceId() {
   const hash = crypto.createHash('sha256');
   for (const name of SOURCE_FILES) hash.update(name).update('\0').update(fs.readFileSync(path.resolve(__dirname, name))).update('\0');
@@ -67,7 +68,11 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
   // Re-reads config.json and rebuilds the catalog on every request so edits
   // from the settings UI or the picker API apply without a restart.
   const getCatalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...observedNatives.values()]); };
-  const pickerContext = () => ({ version: VERSION, catalog: getCatalog(), config: config(), configFile, writeConfig, observedNatives });
+  const pendingDiscovers = new Map();
+  const modelsDevFile = path.join(root, 'models-dev.json');
+  const pickerContext = () => ({ version: VERSION, catalog: getCatalog(), config: config(), configFile, writeConfig, observedNatives,
+    discover, pendingDiscovers,
+    modelsDevIndex: async () => { try { return (await loadIndex({ file: modelsDevFile })).index; } catch { return null; } } });
   const handle = async (request, response) => {
     const incoming = new URL(request.url, 'https://server.codeium.com');
     const rpc = incoming.pathname;
