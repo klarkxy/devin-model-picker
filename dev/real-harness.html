@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>devin-model-picker real harness</title>
+<style>
+  body { margin:0; font:13px/1.5 -apple-system,"Segoe UI",sans-serif; }
+  body.dmp-dark { background:#16181d; color:#e7e9ec; }
+  body.dmp-light { background:#f4f5f7; color:#1f2329; }
+  #composer { position:fixed; left:5%; right:5%; bottom:28px; padding:14px 16px;
+    border:1px solid #8884; border-radius:12px; display:flex; align-items:center; gap:10px; }
+  #topbar { position:fixed; left:5%; right:5%; top:52px; padding:10px 14px;
+    border:1px solid #8884; border-radius:12px; display:flex; align-items:center; gap:10px; }
+  button[aria-haspopup="menu"] { border:1px solid #8886; background:transparent; color:inherit;
+    border-radius:8px; padding:5px 12px; font-size:12px; cursor:pointer; }
+  #dmp-harness-log { position:fixed; top:12px; right:12px; width:360px; max-height:40vh;
+    overflow:auto; white-space:pre-wrap; font:11px ui-monospace,Consolas,monospace;
+    border:1px solid #8884; border-radius:8px; padding:8px; opacity:.85; }
+</style>
+</head>
+<body class="dmp-dark">
+<div id="topbar">top trigger</div>
+<div id="composer"> composer mock </div>
+<pre id="dmp-harness-log">harness log</pre>
+<script src="./real-data.js"></script>
+<script src="./fixture.js"></script>
+<script>
+  // Theme is conveyed purely by ancestor background color (luminance), never a
+  // .dark class — mirrors real Devin workbench.
+  const dark = new URLSearchParams(location.search).get('theme') !== 'light';
+  document.body.className = dark ? 'dmp-dark' : 'dmp-light';
+  const fixture = window.DMP_FIXTURE;
+  const mk = (value, label) => {
+    const holder = window.DMP_FIBER({ visibleModelConfigs: fixture.visibleModelConfigs });
+    holder.pickerProps.value = value;
+    holder.button.querySelector('[data-label]').textContent = label;
+    return holder.button;
+  };
+  document.getElementById('composer').appendChild(mk('claude-opus-5-5-medium', 'Claude Opus 5.5 Medium'));
+  document.getElementById('topbar').appendChild(mk('fusion-dmp-a', 'BYOK Fusion'));
+</script>
+<script src="../media/picker.js"></script>
+</body>
+</html>

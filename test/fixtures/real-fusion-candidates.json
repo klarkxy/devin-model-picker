@@ -1,0 +1,786 @@
+{
+ "leads": [
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-opus-5-5-medium"
+   },
+   "label": "Claude Opus 5.5 Medium",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 1,
+   "familyLabel": "Claude Opus 5.5",
+   "familyKey": "claude-opus-5-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-fable-5-2-medium"
+   },
+   "label": "Claude Fable 5.2 Medium",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 1,
+   "familyLabel": "Claude Fable 5.2",
+   "familyKey": "claude-fable-5-2"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-fable-5-1-medium"
+   },
+   "label": "Claude Fable 5.1 Medium",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 1,
+   "familyLabel": "Claude Fable 5.1",
+   "familyKey": "claude-fable-5-1"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-fable-5-2-high"
+   },
+   "label": "Claude Fable 5.2 High",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 2,
+   "familyLabel": "Claude Fable 5.2",
+   "familyKey": "claude-fable-5-2"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-fable-5-1-high"
+   },
+   "label": "Claude Fable 5.1 High",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 2,
+   "familyLabel": "Claude Fable 5.1",
+   "familyKey": "claude-fable-5-1"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-5-6-sol-high"
+   },
+   "label": "GPT-5.6 Sol High Thinking",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 3,
+   "familyLabel": "GPT-5.6 Sol",
+   "familyKey": "gpt-5.6-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-opus-5-high"
+   },
+   "label": "Claude Opus 5 High",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 2,
+   "familyLabel": "Claude Opus 5",
+   "familyKey": "claude-opus-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-opus-5-5-high"
+   },
+   "label": "Claude Opus 5.5 High",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 2,
+   "familyLabel": "Claude Opus 5.5",
+   "familyKey": "claude-opus-5-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-sonnet-5-5-high"
+   },
+   "label": "Claude Sonnet 5.5 High",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 2,
+   "familyLabel": "Claude Sonnet 5.5",
+   "familyKey": "claude-sonnet-5-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-2-astra-high"
+   },
+   "label": "GPT-6.2 Astra High Thinking",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 3,
+   "familyLabel": "GPT-6.2 Astra",
+   "familyKey": "gpt-6-2-astra"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-astra-high"
+   },
+   "label": "GPT-6 Astra High Thinking",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 3,
+   "familyLabel": "GPT-6 Astra",
+   "familyKey": "gpt-6-astra"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-sol-high"
+   },
+   "label": "GPT-6 Sol High Thinking",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 3,
+   "familyLabel": "GPT-6 Sol",
+   "familyKey": "gpt-6-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-2-sol-high"
+   },
+   "label": "GPT-6.2 Sol High Thinking",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 3,
+   "familyLabel": "GPT-6.2 Sol",
+   "familyKey": "gpt-6-2-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-1-sol-high"
+   },
+   "label": "GPT-6.1 Sol High Thinking",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 3,
+   "familyLabel": "GPT-6.1 Sol",
+   "familyKey": "gpt-6-1-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-5-6-sol-medium"
+   },
+   "label": "GPT-5.6 Sol Medium Thinking",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 2,
+   "familyLabel": "GPT-5.6 Sol",
+   "familyKey": "gpt-5.6-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-opus-5-medium"
+   },
+   "label": "Claude Opus 5 Medium",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 1,
+   "familyLabel": "Claude Opus 5",
+   "familyKey": "claude-opus-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-sonnet-5-5-medium"
+   },
+   "label": "Claude Sonnet 5.5 Medium",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 1,
+   "familyLabel": "Claude Sonnet 5.5",
+   "familyKey": "claude-sonnet-5-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-2-astra-medium"
+   },
+   "label": "GPT-6.2 Astra Medium Thinking",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 2,
+   "familyLabel": "GPT-6.2 Astra",
+   "familyKey": "gpt-6-2-astra"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-astra-medium"
+   },
+   "label": "GPT-6 Astra Medium Thinking",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 2,
+   "familyLabel": "GPT-6 Astra",
+   "familyKey": "gpt-6-astra"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-sol-medium"
+   },
+   "label": "GPT-6 Sol Medium Thinking",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 2,
+   "familyLabel": "GPT-6 Sol",
+   "familyKey": "gpt-6-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-2-sol-medium"
+   },
+   "label": "GPT-6.2 Sol Medium Thinking",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 2,
+   "familyLabel": "GPT-6.2 Sol",
+   "familyKey": "gpt-6-2-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-1-sol-medium"
+   },
+   "label": "GPT-6.1 Sol Medium Thinking",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 2,
+   "familyLabel": "GPT-6.1 Sol",
+   "familyKey": "gpt-6-1-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-opus-5-xhigh"
+   },
+   "label": "Claude Opus 5 XHigh",
+   "providerName": "Devin",
+   "effort": "XHigh",
+   "effortOrder": 3,
+   "familyLabel": "Claude Opus 5",
+   "familyKey": "claude-opus-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-opus-5-5-xhigh"
+   },
+   "label": "Claude Opus 5.5 XHigh",
+   "providerName": "Devin",
+   "effort": "XHigh",
+   "effortOrder": 3,
+   "familyLabel": "Claude Opus 5.5",
+   "familyKey": "claude-opus-5-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-sonnet-5-5-xhigh"
+   },
+   "label": "Claude Sonnet 5.5 XHigh",
+   "providerName": "Devin",
+   "effort": "XHigh",
+   "effortOrder": 3,
+   "familyLabel": "Claude Sonnet 5.5",
+   "familyKey": "claude-sonnet-5-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-fable-5-2-xhigh"
+   },
+   "label": "Claude Fable 5.2 XHigh",
+   "providerName": "Devin",
+   "effort": "XHigh",
+   "effortOrder": 3,
+   "familyLabel": "Claude Fable 5.2",
+   "familyKey": "claude-fable-5-2"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-fable-5-1-xhigh"
+   },
+   "label": "Claude Fable 5.1 XHigh",
+   "providerName": "Devin",
+   "effort": "XHigh",
+   "effortOrder": 3,
+   "familyLabel": "Claude Fable 5.1",
+   "familyKey": "claude-fable-5-1"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-5-6-sol-xhigh"
+   },
+   "label": "GPT-5.6 Sol XHigh Thinking",
+   "providerName": "Devin",
+   "effort": "XHigh",
+   "effortOrder": 4,
+   "familyLabel": "GPT-5.6 Sol",
+   "familyKey": "gpt-5.6-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-2-astra-xhigh"
+   },
+   "label": "GPT-6.2 Astra XHigh Thinking",
+   "providerName": "Devin",
+   "effort": "XHigh",
+   "effortOrder": 4,
+   "familyLabel": "GPT-6.2 Astra",
+   "familyKey": "gpt-6-2-astra"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-astra-xhigh"
+   },
+   "label": "GPT-6 Astra XHigh Thinking",
+   "providerName": "Devin",
+   "effort": "XHigh",
+   "effortOrder": 4,
+   "familyLabel": "GPT-6 Astra",
+   "familyKey": "gpt-6-astra"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-sol-xhigh"
+   },
+   "label": "GPT-6 Sol XHigh Thinking",
+   "providerName": "Devin",
+   "effort": "XHigh",
+   "effortOrder": 4,
+   "familyLabel": "GPT-6 Sol",
+   "familyKey": "gpt-6-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-2-sol-xhigh"
+   },
+   "label": "GPT-6.2 Sol XHigh Thinking",
+   "providerName": "Devin",
+   "effort": "XHigh",
+   "effortOrder": 4,
+   "familyLabel": "GPT-6.2 Sol",
+   "familyKey": "gpt-6-2-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-1-sol-xhigh"
+   },
+   "label": "GPT-6.1 Sol XHigh Thinking",
+   "providerName": "Devin",
+   "effort": "XHigh",
+   "effortOrder": 4,
+   "familyLabel": "GPT-6.1 Sol",
+   "familyKey": "gpt-6-1-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-5-6-sol-low"
+   },
+   "label": "GPT-5.6 Sol Low Thinking",
+   "providerName": "Devin",
+   "effort": "Low",
+   "effortOrder": 1,
+   "familyLabel": "GPT-5.6 Sol",
+   "familyKey": "gpt-5.6-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-opus-5-low"
+   },
+   "label": "Claude Opus 5 Low",
+   "providerName": "Devin",
+   "effort": "Low",
+   "effortOrder": 0,
+   "familyLabel": "Claude Opus 5",
+   "familyKey": "claude-opus-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-opus-5-5-low"
+   },
+   "label": "Claude Opus 5.5 Low",
+   "providerName": "Devin",
+   "effort": "Low",
+   "effortOrder": 0,
+   "familyLabel": "Claude Opus 5.5",
+   "familyKey": "claude-opus-5-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-sonnet-5-5-low"
+   },
+   "label": "Claude Sonnet 5.5 Low",
+   "providerName": "Devin",
+   "effort": "Low",
+   "effortOrder": 0,
+   "familyLabel": "Claude Sonnet 5.5",
+   "familyKey": "claude-sonnet-5-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-fable-5-2-low"
+   },
+   "label": "Claude Fable 5.2 Low",
+   "providerName": "Devin",
+   "effort": "Low",
+   "effortOrder": 0,
+   "familyLabel": "Claude Fable 5.2",
+   "familyKey": "claude-fable-5-2"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-fable-5-1-low"
+   },
+   "label": "Claude Fable 5.1 Low",
+   "providerName": "Devin",
+   "effort": "Low",
+   "effortOrder": 0,
+   "familyLabel": "Claude Fable 5.1",
+   "familyKey": "claude-fable-5-1"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-2-astra-low"
+   },
+   "label": "GPT-6.2 Astra Low Thinking",
+   "providerName": "Devin",
+   "effort": "Low",
+   "effortOrder": 1,
+   "familyLabel": "GPT-6.2 Astra",
+   "familyKey": "gpt-6-2-astra"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-astra-low"
+   },
+   "label": "GPT-6 Astra Low Thinking",
+   "providerName": "Devin",
+   "effort": "Low",
+   "effortOrder": 1,
+   "familyLabel": "GPT-6 Astra",
+   "familyKey": "gpt-6-astra"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-sol-low"
+   },
+   "label": "GPT-6 Sol Low Thinking",
+   "providerName": "Devin",
+   "effort": "Low",
+   "effortOrder": 1,
+   "familyLabel": "GPT-6 Sol",
+   "familyKey": "gpt-6-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-2-sol-low"
+   },
+   "label": "GPT-6.2 Sol Low Thinking",
+   "providerName": "Devin",
+   "effort": "Low",
+   "effortOrder": 1,
+   "familyLabel": "GPT-6.2 Sol",
+   "familyKey": "gpt-6-2-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-1-sol-low"
+   },
+   "label": "GPT-6.1 Sol Low Thinking",
+   "providerName": "Devin",
+   "effort": "Low",
+   "effortOrder": 1,
+   "familyLabel": "GPT-6.1 Sol",
+   "familyKey": "gpt-6-1-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-fable-5-2-max"
+   },
+   "label": "Claude Fable 5.2 Max",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 4,
+   "familyLabel": "Claude Fable 5.2",
+   "familyKey": "claude-fable-5-2"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-fable-5-1-max"
+   },
+   "label": "Claude Fable 5.1 Max",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 4,
+   "familyLabel": "Claude Fable 5.1",
+   "familyKey": "claude-fable-5-1"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-2-astra-max"
+   },
+   "label": "GPT-6.2 Astra Max Thinking",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 5,
+   "familyLabel": "GPT-6.2 Astra",
+   "familyKey": "gpt-6-2-astra"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-astra-max"
+   },
+   "label": "GPT-6 Astra Max Thinking",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 5,
+   "familyLabel": "GPT-6 Astra",
+   "familyKey": "gpt-6-astra"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-sol-max"
+   },
+   "label": "GPT-6 Sol Max Thinking",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 5,
+   "familyLabel": "GPT-6 Sol",
+   "familyKey": "gpt-6-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-2-sol-max"
+   },
+   "label": "GPT-6.2 Sol Max Thinking",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 5,
+   "familyLabel": "GPT-6.2 Sol",
+   "familyKey": "gpt-6-2-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-1-sol-max"
+   },
+   "label": "GPT-6.1 Sol Max Thinking",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 5,
+   "familyLabel": "GPT-6.1 Sol",
+   "familyKey": "gpt-6-1-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-5-6-sol-max"
+   },
+   "label": "GPT-5.6 Sol Max Thinking",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 5,
+   "familyLabel": "GPT-5.6 Sol",
+   "familyKey": "gpt-5.6-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-opus-5-max"
+   },
+   "label": "Claude Opus 5 Max",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 4,
+   "familyLabel": "Claude Opus 5",
+   "familyKey": "claude-opus-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-opus-5-5-max"
+   },
+   "label": "Claude Opus 5.5 Max",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 4,
+   "familyLabel": "Claude Opus 5.5",
+   "familyKey": "claude-opus-5-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-sonnet-5-5-max"
+   },
+   "label": "Claude Sonnet 5.5 Max",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 4,
+   "familyLabel": "Claude Sonnet 5.5",
+   "familyKey": "claude-sonnet-5-5"
+  }
+ ],
+ "sidekicks": [
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "swe-2-medium"
+   },
+   "label": "SWE-2 Medium",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 0,
+   "familyLabel": "SWE-2",
+   "familyKey": "swe-2"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-5-6-luna-high"
+   },
+   "label": "GPT-5.6 Luna High",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 3,
+   "familyLabel": "GPT-5.6 Luna",
+   "familyKey": "gpt-5.6-luna"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-luna-high"
+   },
+   "label": "GPT-6 Luna High",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 3,
+   "familyLabel": "GPT-6 Luna",
+   "familyKey": "gpt-6-luna"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-6-1-terra-high"
+   },
+   "label": "GPT-6.1 Terra High",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 3,
+   "familyLabel": "GPT-6.1 Terra",
+   "familyKey": "gpt-6-1-terra"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "glm-5-2"
+   },
+   "label": "GLM-5.2 High",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 1,
+   "familyLabel": "GLM-5.2",
+   "familyKey": "glm-5.2"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "gpt-5-6-sol-high"
+   },
+   "label": "GPT-5.6 Sol High",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 3,
+   "familyLabel": "GPT-5.6 Sol",
+   "familyKey": "gpt-5.6-sol"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "swe-2-high"
+   },
+   "label": "SWE-2 High",
+   "providerName": "Devin",
+   "effort": "High",
+   "effortOrder": 1,
+   "familyLabel": "SWE-2",
+   "familyKey": "swe-2"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "swe-2-flash-max"
+   },
+   "label": "SWE-2 Flash Max",
+   "providerName": "Devin",
+   "effort": "Max",
+   "effortOrder": 2,
+   "familyLabel": "SWE-2 Flash",
+   "familyKey": "swe-2-flash"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-sonnet-5-5-medium"
+   },
+   "label": "Claude Sonnet 5.5 Medium",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 1,
+   "familyLabel": "Claude Sonnet 5.5",
+   "familyKey": "claude-sonnet-5-5"
+  },
+  {
+   "ref": {
+    "kind": "native",
+    "uid": "claude-haiku-5-5-medium"
+   },
+   "label": "Claude Haiku 5.5 Medium",
+   "providerName": "Devin",
+   "effort": "Medium",
+   "effortOrder": 1,
+   "familyLabel": "Claude Haiku 5.5",
+   "familyKey": "claude-haiku-5-5"
+  }
+ ]
+}

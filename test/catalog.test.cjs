@@ -1,8 +1,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildCatalog, resolveAssignment, augmentCatalog, collectNativeModels, ownUid } = require('../src/catalog.cjs');
-const { fields, s } = require('../src/protocol/wire.cjs');
+const fs = require('fs');
+const { buildCatalog, resolveAssignment, augmentCatalog, collectNativeModels, ownUid,
+  discoverOfficialRoles } = require('../src/catalog.cjs');
+const { fields, s, m } = require('../src/protocol/wire.cjs');
 
 const providers = () => [{ id: 'p', name: 'P', models: [{ id: 'm1', label: 'M1', efforts: [null, 'high'] }] }];
 const NATIVES = [
@@ -108,4 +110,16 @@ test('protobuf augment emits both fusion entries as model routers', () => {
   const info = fields(a.raw, 23)[0].value;
   assert.ok(a.raw.length > 0);
   assert.ok(s(22, 'fusion-dmp-a').length > 0 && info.length > 0);
+});
+
+test('real proto bytes: absent order/name fields no longer drop fusionMetadata', () => {
+  const entries = JSON.parse(fs.readFileSync(require('path').resolve(__dirname, 'fixtures/real-proto-entries.json'), 'utf8'));
+  const list = Buffer.concat(entries.map(b64 => m(1, Buffer.from(b64, 'base64'))));
+  const seen = collectNativeModels(list, { rpc: '/x/GetCliModelConfigs' });
+  const fusionMeta = seen.filter(entry => Array.isArray(entry.fusionMetadata));
+  assert.ok(fusionMeta.length > 20, 'real fusion entries keep their family metadata');
+  const roles = discoverOfficialRoles(seen);
+  assert.ok(roles.eligibleNativeLeads.has('claude-opus-5-5-medium'), 'native leads discovered');
+  assert.ok(roles.eligibleNativeSidekicks.has('swe-2-medium'));
+  assert.ok(roles.eligibleNativeSidekicks.has('swe-2-high'));
 });

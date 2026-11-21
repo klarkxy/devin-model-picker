@@ -138,6 +138,54 @@ function stripProvider(label) {
 }
 
 const HIDDEN_DISPLAY = new Set(['model-router', 'invisible', 'arena']);
+const EFFORT_ORDER = { none: 0, off: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 6, minimal: 7 };
+const TOGGLE_LABELS = { 'fast mode': 'Fast', '1m context': '1M', 'thinking': 'Thinking',
+  'prompt cache retention': 'Cache', 'speed': 'Speed' };
+const toggleLabel = key => TOGGLE_LABELS[key.toLowerCase()] || key;
+
+// Family dims split: the effort dimension is the named one whose key matches
+// /effort/i (or the only named dim); unnamed dims are toggle switches.
+function dimRoles(dims) {
+  const entries = Object.entries(dims || {}).filter(([, v]) => v && typeof v === 'object');
+  const named = entries.filter(([, v]) => typeof v.name === 'string' && v.name !== '');
+  const effort = named.find(([key]) => /effort/i.test(key)) || (named.length === 1 ? named[0] : null);
+  const toggles = entries.filter(([, v]) => !(typeof v.name === 'string' && v.name !== ''));
+  return { effort, toggles };
+}
+
+// Aggregates a family's variants into { cells: [{order,label}], toggles: [key] }
+// — one cell per distinct effort order, one toggle per unnamed dim whose order
+// varies across variants.
+function aggregateFamily(family) {
+  const cells = new Map();
+  const seen = new Map();
+  for (const variant of family.variants) {
+    if (variant.effortOrder != null && !cells.has(variant.effortOrder)) {
+      cells.set(variant.effortOrder, { order: variant.effortOrder, label: effortLabel(variant.effort) });
+    }
+    for (const key of Object.keys(variant.toggles || {})) {
+      const rec = seen.get(key) || { zero: false, nonzero: false };
+      if ((variant.toggles[key] || 0) === 0) rec.zero = true; else rec.nonzero = true;
+      seen.set(key, rec);
+    }
+  }
+  family.cells = [...cells.values()].sort((a, b) => a.order - b.order);
+  family.toggles = [...seen.entries()].filter(([, rec]) => rec.zero && rec.nonzero).map(([key]) => key);
+  return family;
+}
+
+// Variant matching an effort order and toggle states; fewest toggle diffs wins.
+function matchVariant(family, effortOrder, toggles) {
+  const same = family.variants.filter(variant => variant.effortOrder === effortOrder && !variant.disabled);
+  if (!same.length) return null;
+  let best = same[0], bestScore = Infinity;
+  for (const variant of same) {
+    const score = (family.toggles || []).reduce(
+      (n, key) => n + (((variant.toggles?.[key] || 0) !== (toggles?.[key] || 0)) ? 1 : 0), 0);
+    if (score < bestScore) { best = variant; bestScore = score; }
+  }
+  return best;
+}
 
 // Groups filtered visibleModelConfigs into merged family cards.
 // Each card: { cardKey, name, version, variant, families: [{ providerName,
@@ -159,18 +207,23 @@ function groupCards(models, state) {
     const familyUid = byokEntry && byokEntry.providerId && byokEntry.modelId
       ? 'byok:' + byokEntry.providerId + ':' + byokEntry.modelId
       : (model.familyUid || uid);
-    const effortOrder = Number.isSafeInteger(model.familyMetadata?.Effort?.order) ? model.familyMetadata.Effort.order : 1e9;
+    const { effort: effortDim, toggles: toggleDims } = dimRoles(model.familyMetadata);
     const byokEffort = byokEntry ? byokEntry.effort : undefined;
-    const nativeEffort = model.familyMetadata?.Effort?.name;
+    const nativeEffort = effortDim ? effortDim[1].name : undefined;
     const effort = byokEntry ? byokEffort : (nativeEffort ?? null);
+    // BYOK's null-effort variant is the provider default and gets no cell;
+    // every native effort order is a cell ('None' → Off).
+    const effortOrder = byokEntry
+      ? (byokEffort === null ? null
+        : (effortDim ? effortDim[1].order : (EFFORT_ORDER[String(byokEffort).toLowerCase()] ?? 1e9)))
+      : (effortDim ? effortDim[1].order : null);
+    const toggles = Object.fromEntries(toggleDims.map(([key, val]) => [key, Number(val.order) || 0]));
     const providerName = byokEntry ? (byokEntry.providerName || String(byokEntry.label || '').split(' · ')[0] || 'BYOK') : 'Devin';
     const variant = {
-      uid, label: String(model.label || uid), effort,
-      effortText: effortLabel(effort ?? nativeEffort),
+      uid, label: String(model.label || uid), effort, effortOrder, toggles,
       disabled: model.disabled === true, disabledReason: model.disabledReason,
       isDefault: byokEntry ? byokEntry.effort === null : model.isDefaultModelInFamily === true,
-      hasCell: byokEntry ? byokEntry.effort !== null : nativeEffort != null,
-      effortOrder, free: model.modelCost?.type === 'free', supportsImages: model.supportsImages !== false,
+      free: model.modelCost?.type === 'free', supportsImages: model.supportsImages !== false,
     };
     // BYOK labels carry the effort suffix ('… High'); the model id is the
     // stable name basis so every effort variant lands on the same card.
@@ -179,16 +232,26 @@ function groupCards(models, state) {
     if (!cards.has(key)) cards.set(key, { ...parsed, cardKey: key, families: new Map() });
     const card = cards.get(key);
     if (!card.families.has(familyUid)) {
-      card.families.set(familyUid, { providerName, vendor: vendorOf(model, byokEntry), variants: [] });
+      card.families.set(familyUid, { providerName, vendor: vendorOf(model, byokEntry), variants: [], familyLabel: '' });
     }
     const family = card.families.get(familyUid);
     if (providerName && !family.providerName) family.providerName = providerName;
+    if (!family.familyLabel) {
+      // Subtitle: the family's own label — native familyLabel, or the BYOK
+      // label minus provider prefix and trailing effort name.
+      let base = byokEntry ? stripProvider(byokEntry.label || '') : String(model.familyLabel || stripProvider(model.label));
+      if (byokEntry && nativeEffort && base.endsWith(' ' + nativeEffort)) base = base.slice(0, -nativeEffort.length - 1);
+      family.familyLabel = base;
+    }
     family.free = family.free || variant.free;
     family.variants.push(variant);
   }
   for (const card of cards.values()) {
     card.families = [...card.families.values()];
-    for (const family of card.families) family.variants.sort((a, b) => a.effortOrder - b.effortOrder);
+    for (const family of card.families) {
+      family.variants.sort((a, b) => (a.effortOrder ?? 1e9) - (b.effortOrder ?? 1e9));
+      aggregateFamily(family);
+    }
   }
   return [...cards.values()];
 }
@@ -212,17 +275,34 @@ function groupFusion(candidates, nativeIndex) {
     const ref = candidate?.ref;
     if (!ref || typeof ref.uid !== 'string') continue;
     const nativeEntry = ref.kind === 'native' ? nativeIndex?.get(ref.uid) : undefined;
-    const familyKey = ref.kind === 'byok' ? candidate.familyKey : (nativeEntry?.familyUid || candidate.familyKey || ref.uid);
-    const effort = ref.kind === 'byok' ? candidate.effort : (nativeEntry?.familyMetadata?.Effort?.name ?? candidate.effort ?? null);
-    const parsed = cardName(ref.kind === 'byok' ? candidate.label : (nativeEntry?.familyLabel || candidate.label));
+    // Candidates carry familyUid/familyLabel/effortOrder from the backend;
+    // visibleModelConfigs is only a fallback for older backends.
+    const familyKey = candidate.familyKey || nativeEntry?.familyUid || ref.uid;
+    const { effort: effortDim, toggles: toggleDims } = dimRoles(nativeEntry?.familyMetadata);
+    const effort = candidate.effort ?? (effortDim ? effortDim[1].name : null);
+    // Same aggregation as single mode: BYOK null = default (no cell), native
+    // effort orders become deduplicated cells.
+    const effortOrder = candidate.effortOrder ?? (ref.kind === 'byok'
+      ? (candidate.effort == null ? null : (EFFORT_ORDER[String(candidate.effort).toLowerCase()] ?? 1e9))
+      : (effortDim ? effortDim[1].order : null));
+    const toggles = Object.fromEntries(toggleDims.map(([key, val]) => [key, Number(val.order) || 0]));
+    const parsed = cardName(candidate.familyLabel || nativeEntry?.familyLabel || candidate.label);
     const key = (ref.kind === 'byok' ? 'b:' : 'n:') + familyKey;
     if (!cards.has(key)) cards.set(key, { ...parsed, cardKey: key, providerName: candidate.providerName,
-      vendor: ref.kind === 'byok' ? 'other' : 'windsurf', variants: [] });
-    cards.get(key).variants.push({ ref, uid: ref.uid, label: candidate.label, effort,
-      effortText: effortLabel(effort), hasCell: effort != null, disabled: false, isDefault: effort == null,
-      effortOrder: Number.isSafeInteger(nativeEntry?.familyMetadata?.Effort?.order) ? nativeEntry.familyMetadata.Effort.order : 1e9 });
+      vendor: ref.kind === 'byok' ? 'other' : 'windsurf', variants: [], familyLabel: '' });
+    const card = cards.get(key);
+    if (!card.familyLabel) {
+      let base = candidate.familyLabel || (ref.kind === 'native' && nativeEntry?.familyLabel) || stripProvider(candidate.label || '');
+      if (!candidate.familyLabel && effort && base.endsWith(' ' + effort)) base = base.slice(0, -effort.length - 1);
+      card.familyLabel = base;
+    }
+    card.variants.push({ ref, uid: ref.uid, label: candidate.label, effort, effortOrder, toggles,
+      disabled: false, isDefault: ref.kind === 'byok' ? candidate.effort == null : nativeEntry?.isDefaultModelInFamily === true });
   }
-  for (const card of cards.values()) card.variants.sort((a, b) => a.effortOrder - b.effortOrder);
+  for (const card of cards.values()) {
+    card.variants.sort((a, b) => (a.effortOrder ?? 1e9) - (b.effortOrder ?? 1e9));
+    aggregateFamily(card);
+  }
   return [...cards.values()];
 }
 
@@ -269,7 +349,8 @@ const LS_KEY = 'devin-model-picker:v1';
 
 const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, baseLabel,
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
-  underlyingKey, IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
+  underlyingKey, matchVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
+  IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
 if (typeof module === 'object' && module.exports) { module.exports = exportsMap; return; }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +380,7 @@ const CSS = `
  color:var(--dmp-fg);padding:5px 9px;font-size:12px;outline:none;min-width:0}
 .dmp-filter:focus{border-color:var(--dmp-sel)}
 .dmp-grid{padding:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(176px,1fr));
- gap:8px;overflow-y:auto}
+ gap:8px;overflow-y:auto;flex:1;min-height:0}
 .dmp-card{position:relative;display:flex;flex-direction:column;gap:6px;padding:9px 10px 8px;
  border-radius:10px;border:1px solid var(--dmp-border);background:var(--dmp-card);cursor:pointer}
 .dmp-card:hover{background:var(--dmp-card-hover)}
@@ -324,6 +405,11 @@ const CSS = `
 .dmp-eff button:hover{color:var(--dmp-fg);border-color:var(--dmp-muted)}
 .dmp-eff button.dmp-on{background:var(--dmp-sel);border-color:var(--dmp-sel);color:#fff}
 .dmp-eff button:disabled{opacity:.4;cursor:default}
+.dmp-togs{display:flex;justify-content:flex-end;gap:4px;margin:2px 0 4px}
+.dmp-tog{border:1px solid var(--dmp-border);border-radius:999px;background:var(--dmp-chip);
+ color:var(--dmp-muted);font-size:9px;padding:1px 7px;cursor:pointer}
+.dmp-tog.dmp-on{background:var(--dmp-sel);border-color:var(--dmp-sel);color:#fff}
+.dmp-tog:disabled{opacity:.4;cursor:default}
 .dmp-foot{padding:7px 12px;border-top:1px solid var(--dmp-border);font-size:11px;
  color:var(--dmp-muted);display:flex;align-items:center;gap:8px}
 .dmp-empty{padding:24px;text-align:center;color:var(--dmp-muted);font-size:12px}
@@ -429,7 +515,26 @@ function ensureStyle() {
   document.head.appendChild(styleNode);
 }
 
-const isDark = () => document.body && document.body.classList.contains('dark');
+// Theme: relative luminance of the first non-transparent ancestor background
+// walking up from the trigger (Devin's workbench body has no .dark class).
+function isDark(anchor) {
+  try {
+    let node = anchor || document.body;
+    while (node) {
+      const bg = getComputedStyle(node).backgroundColor;
+      const match = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+))?/.exec(bg || '');
+      if (match && (match[4] === undefined || Number(match[4]) !== 0)) {
+        const lum = (0.2126 * Number(match[1]) + 0.7152 * Number(match[2]) + 0.0722 * Number(match[3])) / 255;
+        return lum < 0.5;
+      }
+      if (node === document.documentElement) break;
+      node = node.parentElement || null;
+    }
+  } catch {}
+  return document.body?.classList.contains('dark')
+    || document.documentElement?.classList.contains('dark')
+    || !!document.querySelector('.monaco-workbench.vs-dark, .monaco-workbench.hc-black');
+}
 
 function currentValue(located) { return located?.root?.value; }
 
@@ -445,9 +550,20 @@ function chooseFamily(card, located) {
   return card.families[index >= 0 ? index : 0];
 }
 
-function familyCurrentUid(family) {
-  // The current picker value, if it lives in this family's variants.
-  return panelState && panelState.value;
+// Per-card local state: which effort + toggles the card would select. The
+// current family mirrors the live variant; others start from their default.
+function cardStateFor(card, family, located) {
+  const key = card.cardKey + '|' + (family.providerName || '');
+  if (!panelState.cardStates.has(key)) {
+    const value = currentValue(located);
+    const live = family.variants.find(variant => variant.uid === value);
+    const def = live || defaultVariant(family);
+    panelState.cardStates.set(key, {
+      effortOrder: def?.effortOrder ?? family.cells[0]?.order ?? null,
+      toggles: Object.fromEntries((family.toggles || []).map(tk => [tk, def?.toggles?.[tk] ?? 0])),
+    });
+  }
+  return panelState.cardStates.get(key);
 }
 
 function buildCard(card, index, located) {
@@ -461,6 +577,13 @@ function buildCard(card, index, located) {
   const enabledVariants = family.variants.filter(variant => !variant.disabled);
   const cardDisabled = enabledVariants.length === 0;
   if (cardDisabled) { node.classList.add('dmp-off'); node.title = family.variants[0]?.disabledReason || ''; }
+  const live = family.variants.find(variant => variant.uid === value);
+  const cardState = cardStateFor(card, family, located);
+  if (live) {
+    // The current family mirrors the live variant's effort + toggles.
+    cardState.effortOrder = live.effortOrder ?? cardState.effortOrder;
+    for (const key of family.toggles || []) cardState.toggles[key] = live.toggles?.[key] ?? 0;
+  }
 
   const top = el('div', 'dmp-top');
   top.appendChild(el('span', 'dmp-idx', String(index + 1).padStart(2, '0')));
@@ -482,19 +605,40 @@ function buildCard(card, index, located) {
   if (card.variant) nameRow.appendChild(el('span', 'dmp-var', card.variant));
   node.appendChild(nameRow);
 
-  const defaultVar = defaultVariant(family);
-  const subLabel = stripProvider((defaultVar || family.variants[0] || {}).label || card.name);
-  node.appendChild(el('div', 'dmp-sub', subLabel + ' · ' + (family.providerName || 'Devin')));
+  node.appendChild(el('div', 'dmp-sub', (family.familyLabel || card.name) + ' · ' + (family.providerName || 'Devin')));
 
-  const cells = family.variants.filter(variant => variant.hasCell);
-  if (cells.length) {
+  if ((family.toggles || []).length) {
+    const row = el('div', 'dmp-togs');
+    for (const key of family.toggles) {
+      const on = (cardState.toggles[key] || 0) !== 0;
+      const pill = el('button', 'dmp-tog' + (on ? ' dmp-on' : ''), toggleLabel(key));
+      pill.addEventListener('click', event => {
+        event.stopPropagation();
+        const next = { ...cardState.toggles, [key]: on ? 0 : 1 };
+        cardState.toggles = next;
+        if (live) {
+          const target = matchVariant(family, cardState.effortOrder, next);
+          if (target) selectModel(located, target.uid);
+        } else rerenderGrid();
+      });
+      row.appendChild(pill);
+    }
+    node.appendChild(row);
+  }
+
+  if (family.cells.length) {
     const eff = el('div', 'dmp-eff');
-    for (const variant of cells) {
-      const cell = el('button', '', variant.effortText || '?');
-      if (variant.uid === value) cell.classList.add('dmp-on');
-      if (variant.disabled) { cell.disabled = true; if (variant.disabledReason) cell.title = variant.disabledReason; }
-      else cell.addEventListener('click', event => { event.stopPropagation(); selectModel(located, variant.uid); });
-      eff.appendChild(cell);
+    for (const cell of family.cells) {
+      const btn = el('button', '', cell.label || '?');
+      const active = live ? live.effortOrder === cell.order : cardState.effortOrder === cell.order;
+      if (active) btn.classList.add('dmp-on');
+      btn.addEventListener('click', event => {
+        event.stopPropagation();
+        cardState.effortOrder = cell.order;
+        const target = matchVariant(family, cell.order, cardState.toggles);
+        if (target) selectModel(located, target.uid);
+      });
+      eff.appendChild(btn);
     }
     node.appendChild(eff);
   }
@@ -523,7 +667,8 @@ function buildCard(card, index, located) {
   }
   if (!cardDisabled) {
     node.addEventListener('click', () => {
-      const target = selected ? family.variants.find(variant => variant.uid === value) || defaultVar : defaultVar;
+      const order = cardState.effortOrder ?? defaultVariant(family)?.effortOrder ?? null;
+      const target = (order != null ? matchVariant(family, order, cardState.toggles) : null) || defaultVariant(family);
       if (target && !target.disabled) selectModel(located, target.uid);
     });
   }
@@ -555,29 +700,55 @@ function buildFusionCard(card, index, located, state) {
   if (card.version) nameRow.appendChild(el('span', 'dmp-ver', card.version));
   if (card.variant) nameRow.appendChild(el('span', 'dmp-var', card.variant));
   node.appendChild(nameRow);
-  const first = card.variants[0];
-  node.appendChild(el('div', 'dmp-sub', stripProvider(first?.label || card.name) + ' · ' + (card.providerName || 'Devin')));
+  node.appendChild(el('div', 'dmp-sub', (card.familyLabel || card.name) + ' · ' + (card.providerName || 'Devin')));
 
-  const cells = card.variants.filter(variant => variant.hasCell);
+  const fkey = card.cardKey;
+  if (!panelState.cardStates.has(fkey)) {
+    const pre = card.variants.find(variant => selectedRefs.includes(variant.ref.kind + ':' + variant.ref.uid)) || defaultVariant(card);
+    panelState.cardStates.set(fkey, {
+      effortOrder: pre?.effortOrder ?? card.cells[0]?.order ?? null,
+      toggles: Object.fromEntries((card.toggles || []).map(tk => [tk, pre?.toggles?.[tk] ?? 0])),
+    });
+  }
+  const cardState = panelState.cardStates.get(fkey);
   const fill = variant => {
-    if (blocked) return;
+    if (!variant || blocked) return;
     slots[panelState.activeSlot] = variant.ref;
     if (panelState.activeSlot === 'lead' && !slots.sidekick) panelState.activeSlot = 'sidekick';
     rerenderGrid();
   };
-  if (cells.length) {
+  if ((card.toggles || []).length) {
+    const row = el('div', 'dmp-togs');
+    for (const key of card.toggles) {
+      const on = (cardState.toggles[key] || 0) !== 0;
+      const pill = el('button', 'dmp-tog' + (on ? ' dmp-on' : ''), toggleLabel(key));
+      if (blocked) pill.disabled = true;
+      else pill.addEventListener('click', event => {
+        event.stopPropagation();
+        cardState.toggles = { ...cardState.toggles, [key]: on ? 0 : 1 };
+        rerenderGrid();
+      });
+      row.appendChild(pill);
+    }
+    node.appendChild(row);
+  }
+  if (card.cells.length) {
     const eff = el('div', 'dmp-eff');
-    for (const variant of cells) {
-      const cell = el('button', '', variant.effortText || '?');
-      if (selectedRefs.includes(variant.ref.kind + ':' + variant.ref.uid)) cell.classList.add('dmp-on');
-      if (blocked) cell.disabled = true;
-      else cell.addEventListener('click', event => { event.stopPropagation(); fill(variant); });
-      eff.appendChild(cell);
+    for (const cell of card.cells) {
+      const btn = el('button', '', cell.label || '?');
+      if (cardState.effortOrder === cell.order) btn.classList.add('dmp-on');
+      if (blocked) btn.disabled = true;
+      else btn.addEventListener('click', event => {
+        event.stopPropagation();
+        cardState.effortOrder = cell.order;
+        fill(matchVariant(card, cell.order, cardState.toggles));
+      });
+      eff.appendChild(btn);
     }
     node.appendChild(eff);
   }
-  const body = card.variants.find(variant => variant.effort == null) || card.variants[0];
-  if (!blocked && body) node.addEventListener('click', () => fill(body));
+  if (!blocked) node.addEventListener('click', () =>
+    fill((cardState.effortOrder != null ? matchVariant(card, cardState.effortOrder, cardState.toggles) : null) || defaultVariant(card)));
   if (selectedRefs.length && card.variants.some(variant => selectedRefs.includes(variant.ref.kind + ':' + variant.ref.uid))) {
     node.classList.add('dmp-sel');
   }
@@ -622,10 +793,13 @@ function rerenderGrid() {
       if (!filterMatch(panelState.filter, [card.name, card.variant, card.providerName, card.cardKey])) return;
       grid.appendChild(buildFusionCard(card, shown++, located, lastState));
     });
-    if (!shown) grid.appendChild(el('div', 'dmp-empty', '没有匹配的模型'));
+    if (!shown) grid.appendChild(el('div', 'dmp-empty',
+      cards.length ? '没有匹配的模型' : '暂无可用的 Fusion 模型'));
     renderFusionFooter();
     return;
   }
+  const oldApply = panel.querySelector('.dmp-apply'); if (oldApply) oldApply.remove();
+  const oldErr = panel.querySelector('.dmp-err'); if (oldErr) oldErr.remove();
   const cards = groupCards(models, lastState);
   let shown = 0;
   cards.forEach(card => {
@@ -668,14 +842,16 @@ function renderFusionFooter() {
 
 function positionPanel(trigger) {
   const rect = trigger.getBoundingClientRect();
-  panel.style.left = '0px';
-  panel.style.top = '0px';
-  const pw = panel.offsetWidth, ph = Math.min(panel.offsetHeight || 400, window.innerHeight * 0.7);
-  let left = Math.min(Math.max(8, rect.left), window.innerWidth - pw - 8);
-  let top = rect.top - ph - 8;
-  if (top < 8) top = Math.min(rect.bottom + 8, window.innerHeight - ph - 8);
+  const desired = 560;
+  const spaceAbove = rect.top - 8;
+  const spaceBelow = window.innerHeight - rect.bottom - 8;
+  const above = spaceAbove >= desired || (spaceBelow < desired && spaceAbove >= spaceBelow);
+  const maxH = Math.max(120, Math.min(desired, above ? spaceAbove : spaceBelow));
+  panel.style.maxHeight = maxH + 'px';
+  const pw = panel.offsetWidth;
+  const left = Math.min(Math.max(8, rect.right - pw), Math.max(8, window.innerWidth - pw - 8));
   panel.style.left = left + 'px';
-  panel.style.top = top + 'px';
+  panel.style.top = (above ? Math.max(8, rect.top - maxH - 8) : rect.bottom + 8) + 'px';
 }
 
 function openPanel(trigger, located) {
@@ -685,9 +861,9 @@ function openPanel(trigger, located) {
   const value = currentValue(located);
   const startsFusion = typeof value === 'string' && value.startsWith('fusion-');
   panelState = { trigger, located, mode: startsFusion ? 'fusion' : 'single', filter: '',
-    value, activeSlot: 'lead',
+    value, activeSlot: 'lead', cardStates: new Map(),
     fusionSlots: { lead: null, sidekick: null } };
-  panel = el('div', 'dmp-panel' + (isDark() ? ' dmp-dark' : ' dmp-light'));
+  panel = el('div', 'dmp-panel' + (isDark(trigger) ? ' dmp-dark' : ' dmp-light'));
   panel.setAttribute('data-devin-zh-skip', '');
   const toolbar = el('div', 'dmp-toolbar');
   const seg = el('div', 'dmp-seg');
@@ -751,9 +927,12 @@ function openPanel(trigger, located) {
   };
   document.addEventListener('pointerdown', onDocDown, true);
   document.addEventListener('keydown', onKey, true);
+  const onResize = () => { if (panel) positionPanel(trigger); };
+  window.addEventListener('resize', onResize);
   panelState.cleanup = () => {
     document.removeEventListener('pointerdown', onDocDown, true);
     document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('resize', onResize);
   };
 }
 
@@ -818,9 +997,10 @@ window.addEventListener('keydown', event => {
 observer = new MutationObserver(scheduleBind);
 observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
 const themeObserver = new MutationObserver(() => {
-  if (panel) {
-    panel.classList.toggle('dmp-dark', isDark());
-    panel.classList.toggle('dmp-light', !isDark());
+  if (panel && panelState) {
+    const dark = isDark(panelState.trigger);
+    panel.classList.toggle('dmp-dark', dark);
+    panel.classList.toggle('dmp-light', !dark);
   }
 });
 if (document.body) themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });

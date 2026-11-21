@@ -181,6 +181,9 @@ function discoverOfficialRoles(nativeModels) {
       uid, label: native.label || uid,
       leadDimension: { order: rec.leadOrder, name: rec.leadName, controlType: 3 },
       effortDimension: { order: rec.effortOrder, name: rec.effortName, controlType: 1 },
+      ...(native.familyUid ? { familyUid: native.familyUid } : {}),
+      ...(native.familyLabel ? { familyLabel: native.familyLabel } : {}),
+      ...(native.modelEffortDimension ? { effortOrder: native.modelEffortDimension.order } : {}),
       leadHarnessUids: harnesses,
       maxTokens: native.maxTokens,
       maxOutputTokens: native.maxOutputTokens,
@@ -197,6 +200,9 @@ function discoverOfficialRoles(nativeModels) {
     eligibleNativeSidekicks.set(uid, {
       uid, label: sidekickName || native.label || uid,
       dimension: { order: sidekickOrder, name: sidekickName },
+      ...(native.familyUid ? { familyUid: native.familyUid } : {}),
+      ...(native.familyLabel ? { familyLabel: native.familyLabel } : {}),
+      ...(native.modelEffortDimension ? { effort: native.modelEffortDimension.name, effortOrder: native.modelEffortDimension.order } : {}),
       harnessUids: native.harnessUids,
     });
   }
@@ -371,6 +377,66 @@ function protoMetadata(entry) {
   } catch { return { harnessUids: [], isModelRouter: false }; }
 }
 
+// Family identity + own effort dimension of a native model: familyUid lives in
+// modelInfo field 23, familyLabel in the family message field 1, effort = the
+// named dimension whose key matches /effort/i (or the only named one).
+// Tolerates proto3 zero-omission (absent order → 0).
+function protoFamilyInfo(entry) {
+  try {
+    const fields = parseFields(entry);
+    const infos = fields.filter(field => field.number === 23 && field.wire === 2);
+    const familyUid = infos.length === 1
+      ? (parseFields(infos[0].value).find(field => field.number === 23 && field.wire === 2)?.value.toString('utf8') || '') : '';
+    const fams = fields.filter(field => field.number === 30 && field.wire === 2);
+    let familyLabel = '', effortDimension = null;
+    if (fams.length === 1) {
+      const parts = parseFields(fams[0].value);
+      familyLabel = parts.find(field => field.number === 1 && field.wire === 2)?.value.toString('utf8') || '';
+      const named = [];
+      for (const field of parts.filter(field => field.number === 2 && field.wire === 2)) {
+        const item = parseFields(field.value);
+        const key = item.find(part => part.number === 1 && part.wire === 2)?.value.toString('utf8') || '';
+        const valMsg = item.find(part => part.number === 2 && part.wire === 2);
+        if (!key || !valMsg) continue;
+        const dims = parseFields(valMsg.value);
+        const orderField = dims.find(part => part.number === 1 && part.wire === 0);
+        const nameField = dims.find(part => part.number === 2 && part.wire === 2);
+        const name = nameField ? nameField.value.toString('utf8') : '';
+        if (name) named.push({ key, order: orderField ? Number(orderField.value) : 0, name });
+      }
+      const effort = named.find(dim => /effort/i.test(dim.key)) || (named.length === 1 ? named[0] : null);
+      if (effort) effortDimension = { order: effort.order, name: effort.name };
+    }
+    return { familyUid, familyLabel, effortDimension };
+  } catch { return { familyUid: '', familyLabel: '', effortDimension: null }; }
+}
+
+function jsonFamilyInfo(entry) {
+  const info = jsonAliasValue(entry, 'modelInfo', 'model_info');
+  const famUid = !info.conflict && info.present && info.value && typeof info.value === 'object'
+    ? jsonAliasValue(info.value, 'modelFamilyUid', 'model_family_uid') : { present: false };
+  const meta = jsonAliasValue(entry, 'modelFamilyMetadata', 'model_family_metadata');
+  let familyLabel = '', effortDimension = null;
+  if (!meta.conflict && meta.present && meta.value && typeof meta.value === 'object' && !Array.isArray(meta.value)) {
+    const label = jsonAliasValue(meta.value, 'modelFamilyLabel', 'model_family_label');
+    if (!label.conflict && label.present && typeof label.value === 'string') familyLabel = label.value;
+    const list = Array.isArray(meta.value.entries) ? meta.value.entries : [];
+    const named = [];
+    for (const item of list) {
+      if (!item || typeof item.key !== 'string' || !item.value || typeof item.value !== 'object') continue;
+      const name = typeof item.value.name === 'string' ? item.value.name : '';
+      if (!name) continue;
+      const order = item.value.order === undefined ? 0 : item.value.order;
+      if (!Number.isSafeInteger(order) || order < 0) continue;
+      named.push({ key: item.key, order, name });
+    }
+    const effort = named.find(dim => /effort/i.test(dim.key)) || (named.length === 1 ? named[0] : null);
+    if (effort) effortDimension = { order: effort.order, name: effort.name };
+  }
+  return { familyUid: !famUid.conflict && famUid.present && typeof famUid.value === 'string' ? famUid.value : '',
+    familyLabel, effortDimension };
+}
+
 const CANONICAL_FAMILY_KEYS = new Set(['Lead', 'Effort', 'Sidekick', 'Fast Mode', 'Recommended Sidekick']);
 
 function protoFusionMetadata(entry) {
@@ -396,15 +462,17 @@ function protoFusionMetadata(entry) {
       const orders = dims.filter(part => part.number === 1);
       const names = dims.filter(part => part.number === 2);
       const controls = dims.filter(part => part.number === 3);
-      if (orders.length !== 1 || orders[0].wire !== 0) return null;
+      // Proto3 omits zero values: an absent order field means order 0 (real
+      // Fast Mode and Recommended Sidekick dims carry order 0 and no name).
+      if (orders.length > 1 || orders.some(part => part.wire !== 0)) return null;
       if (names.length > 1 || names.some(part => part.wire !== 2)) return null;
       if (controls.length > 1 || controls.some(part => part.wire !== 0)) return null;
-      const order = Number(orders[0].value);
+      const order = orders.length ? Number(orders[0].value) : 0;
       const name = names.length ? names[0].value.toString('utf8') : '';
       const controlType = controls.length ? Number(controls[0].value) : 0;
       if (!Number.isSafeInteger(order) || order < 0 || order > 0x7fffffff) return null;
       if (!Number.isSafeInteger(controlType) || controlType < 0 || controlType > 0x7fffffff) return null;
-      if (key !== 'Fast Mode' && !name) return null;
+      if (key !== 'Fast Mode' && key !== 'Recommended Sidekick' && !name) return null;
       entries.push({ key, order, name, controlType });
     }
     return entries.length ? entries : null;
@@ -468,12 +536,14 @@ function jsonFusionMetadata(entry) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const control = jsonAliasValue(value, 'controlType', 'control_type');
     if (control.conflict || (control.present && (!Number.isSafeInteger(control.value) || control.value < 0 || control.value > 0x7fffffff))) return null;
-    if (!Number.isSafeInteger(value.order) || value.order < 0 || value.order > 0x7fffffff) return null;
+    // JSON mirrors proto3 zero-omission: absent order means 0.
+    const order = value.order === undefined ? 0 : value.order;
+    if (!Number.isSafeInteger(order) || order < 0 || order > 0x7fffffff) return null;
     if (value.name !== undefined && typeof value.name !== 'string') return null;
     const name = typeof value.name === 'string' ? value.name : '';
     const controlType = control.present ? control.value : 0;
-    if (key !== 'Fast Mode' && !name) return null;
-    entries.push({ key, order: value.order, name, controlType });
+    if (key !== 'Fast Mode' && key !== 'Recommended Sidekick' && !name) return null;
+    entries.push({ key, order, name, controlType });
   }
   return entries.length ? entries : null;
 }
@@ -481,7 +551,7 @@ function jsonFusionMetadata(entry) {
 function nativeEntries(entries, isJson) {
   const seen = [];
   for (const entry of entries) {
-    let uid, label, disabled, meta, dimension, fusionMeta;
+    let uid, label, disabled, meta, dimension, fusionMeta, family;
     if (isJson) {
       uid = nativeUid(entry);
       label = typeof entry?.label === 'string' ? entry.label : '';
@@ -489,6 +559,7 @@ function nativeEntries(entries, isJson) {
       meta = jsonMetadata(entry);
       fusionMeta = jsonFusionMetadata(entry);
       dimension = extractSidekickDimension(fusionMeta);
+      family = jsonFamilyInfo(entry);
     } else {
       uid = protoUid(entry);
       label = str(entry, 1);
@@ -496,10 +567,14 @@ function nativeEntries(entries, isJson) {
       meta = protoMetadata(entry);
       fusionMeta = protoFusionMetadata(entry);
       dimension = extractSidekickDimension(fusionMeta);
+      family = protoFamilyInfo(entry);
     }
     if (typeof uid !== 'string' || !uid || uid.length > 256 || ownUid(uid)) continue;
     seen.push({
       uid, label, disabled, harnessUids: meta.harnessUids, isModelRouter: meta.isModelRouter,
+      ...(family.familyUid ? { familyUid: family.familyUid } : {}),
+      ...(family.familyLabel ? { familyLabel: family.familyLabel } : {}),
+      ...(family.effortDimension ? { modelEffortDimension: family.effortDimension } : {}),
       ...(dimension ? { sidekickDimension: dimension } : {}),
       ...(fusionMeta ? { fusionMetadata: fusionMeta } : {}),
       ...(meta.maxTokens ? { maxTokens: meta.maxTokens } : {}),

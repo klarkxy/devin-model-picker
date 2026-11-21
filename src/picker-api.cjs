@@ -3,6 +3,8 @@
 // Renderer-side card picker API. The injected workbench script runs with origin
 // vscode-file://vscode-app; that exact origin is required on every /picker/*
 // request while all other backend routes keep rejecting any Origin header.
+const { effortMetadata } = require('./catalog.cjs');
+
 const PICKER_ORIGIN = 'vscode-file://vscode-app';
 const BODY_LIMIT = 64 * 1024;
 
@@ -36,11 +38,21 @@ function candidates(catalog, config) {
   const providers = new Map((Array.isArray(config.providers) ? config.providers : []).map(p => [p.id, p]));
   for (const route of Object.values(catalog.routes || {})) {
     const provider = providers.get(route.providerId);
+    const model = provider && Array.isArray(provider.models)
+      ? provider.models.find(item => item && item.id === route.model) : null;
+    const efforts = Array.isArray(model?.efforts) ? model.efforts : [];
+    const index = route.effort == null ? null : efforts.indexOf(route.effort);
+    const effortOrder = route.effort == null ? null
+      : (index >= 0 ? index : (effortMetadata(route.effort).order ?? null));
+    // Label without the "<provider> · " prefix — the card's family name.
+    const label = route.label || route.model;
+    const prefix = (provider?.name || route.providerId) + ' · ';
     const candidate = {
       ref: { kind: 'byok', uid: route.uid },
-      label: route.label || route.model,
-      providerName: provider?.name || route.providerId,
+      label, providerName: provider?.name || route.providerId,
       effort: route.effort ?? null,
+      ...(effortOrder != null ? { effortOrder } : {}),
+      familyLabel: label.startsWith(prefix) ? label.slice(prefix.length) : label,
       familyKey: 'byok:' + route.providerId + ':' + route.model,
     };
     leads.push(candidate);
@@ -48,11 +60,17 @@ function candidates(catalog, config) {
   }
   for (const native of catalog.roles?.eligibleNativeLeads?.values() || []) {
     leads.push({ ref: { kind: 'native', uid: native.uid }, label: native.label || native.uid,
-      providerName: 'Devin', effort: native.effortDimension?.name ?? null, familyKey: native.familyUid || native.uid });
+      providerName: 'Devin', effort: native.effortDimension?.name ?? null,
+      ...(native.effortOrder != null ? { effortOrder: native.effortOrder } : {}),
+      ...(native.familyLabel ? { familyLabel: native.familyLabel } : {}),
+      familyKey: native.familyUid || native.uid });
   }
   for (const native of catalog.roles?.eligibleNativeSidekicks?.values() || []) {
     sidekicks.push({ ref: { kind: 'native', uid: native.uid }, label: native.label || native.uid,
-      providerName: 'Devin', effort: null, familyKey: native.familyUid || native.uid });
+      providerName: 'Devin', effort: native.effort ?? null,
+      ...(native.effortOrder != null ? { effortOrder: native.effortOrder } : {}),
+      ...(native.familyLabel ? { familyLabel: native.familyLabel } : {}),
+      familyKey: native.familyUid || native.uid });
   }
   return { leads, sidekicks };
 }

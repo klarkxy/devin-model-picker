@@ -49,7 +49,7 @@
       model('fusion-dmp-a', 'BYOK Fusion', { displayOption: 'model-router', provider: 'windsurf', familyMetadata: {} }),
       model('fusion-dmp-b', 'BYOK Fusion', { displayOption: 'model-router', provider: 'windsurf', familyMetadata: {} }),
     ];
-    const visibleModelConfigs = [...byokModels, ...natives, fusionEntry, ...dmpFusions];
+    const visibleModelConfigs = window.DMP_VMC_OVERRIDE || [...byokModels, ...natives, fusionEntry, ...dmpFusions];
     const leads = [
       ...Object.values(byok).map(e => ({ ref: { kind: 'byok', uid: e.uid }, label: e.label.replace(/^.*? · /, ''), providerName: e.providerName, effort: e.effort, familyKey: 'byok:' + e.providerId + ':' + e.modelId })),
       { ref: { kind: 'native', uid: 'claude-opus-5-5-high' }, label: 'Claude Opus 5.5 High', providerName: 'Devin', effort: null, familyKey: 'fam-opus' },
@@ -64,8 +64,9 @@
       fusionSlots: { a: { lead: { kind: 'byok', uid: leads[3].ref.uid, label: leads[3].label }, sidekick: { kind: 'native', uid: 'swe-2-high', label: 'SWE-2 High' } } },
       fusionCandidates: { leads, sidekicks } };
     let slotToggle = 'a';
+    const effectiveState = window.DMP_STATE_OVERRIDE || state;
     window.fetch = async (url, options = {}) => {
-      if (String(url).endsWith('/picker/state')) return new Response(JSON.stringify(state), { status: 200 });
+      if (String(url).endsWith('/picker/state')) return new Response(JSON.stringify(effectiveState), { status: 200 });
       if (String(url).endsWith('/picker/fusion')) {
         const body = JSON.parse(options.body || '{}');
         const log = document.getElementById('dmp-harness-log');
@@ -75,7 +76,7 @@
       }
       return new Response('{}', { status: 404 });
     };
-    return { visibleModelConfigs, state };
+    return { visibleModelConfigs, state: effectiveState };
   })();
 
   // Fake React fiber chain: button → trigger wrapper → host → LocalModelPicker.

@@ -71,15 +71,15 @@ test('groupCards filters router/fusion entries, groups by family and merges prov
   assert.deepEqual(opus.families.map(family => family.providerName).sort(), ['Devin', 'Magpie', 'Relay'],
     'same modelId across two BYOK providers stays two families');
   const magpie = opus.families.find(family => family.providerName === 'Magpie');
-  assert.deepEqual(magpie.variants.filter(variant => variant.hasCell).map(variant => variant.effortText), ['H']);
+  assert.deepEqual(magpie.cells.map(cell => cell.label), ['H']);
   const relay = opus.families.find(family => family.providerName === 'Relay');
-  assert.deepEqual(relay.variants.filter(variant => variant.hasCell).map(variant => variant.effortText), ['Max'],
+  assert.deepEqual(relay.cells.map(cell => cell.label), ['Max'],
     'each provider keeps its own effort cells');
   assert.equal(picker.defaultVariant(magpie).uid, 'dmp-p-claude-a', 'null-effort BYOK variant is the default');
   assert.equal(picker.defaultVariant(relay).uid, 'dmp-r-claude-a');
   const swe = cards.find(card => card.name === 'SWE');
   const sweFamily = swe.families[0];
-  assert.deepEqual(sweFamily.variants.map(variant => variant.effortText), ['H', 'Max'], 'variants ordered by effort order');
+  assert.deepEqual(sweFamily.cells.map(cell => cell.label), ['H', 'Max'], 'cells ordered by effort order');
   assert.equal(picker.defaultVariant(sweFamily).uid, 'swe-2-max', 'isDefaultModelInFamily fallback');
   assert.ok(!cards.some(card => card.name === 'Leady' || card.name === 'Hidden'), 'routers/invisible/Lead-dimension entries excluded');
 });
@@ -94,10 +94,10 @@ test('groupFusion keeps BYOK effort variants in one family card', () => {
   const cards = picker.groupFusion(candidates, natives);
   const opus = cards.find(card => card.cardKey.includes('byok:p:claude-opus-5-5'));
   assert.equal(opus.variants.length, 2);
-  assert.equal(opus.variants[1].effortText, 'H');
+  assert.deepEqual(opus.cells.map(cell => cell.label), ['H']);
   const swe = cards.find(card => card.providerName === 'Devin');
   assert.equal(swe.name, 'SWE');
-  assert.equal(swe.variants[0].effortText, 'H', 'native effort name comes from familyMetadata');
+  assert.deepEqual(swe.cells.map(cell => cell.label), ['H'], 'native effort name comes from familyMetadata');
 });
 
 test('prefillFusion parses dmp slots and official fusion uids', () => {
@@ -136,6 +136,54 @@ test('underlyingKey groups BYOK effort variants but keys natives per uid', () =>
   assert.notEqual(picker.underlyingKey({ kind: 'byok', uid: 'dmp-p-1' }, twoProviders),
     picker.underlyingKey({ kind: 'byok', uid: 'dmp-r-1' }, twoProviders),
     'same modelId under different providers is NOT the same underlying model');
+});
+
+test('groupCards aggregates real Devin families: deduped cells + toggle switches', () => {
+  const models = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'fixtures/real-vmc.json'), 'utf8'));
+  const cards = picker.groupCards(models, { byok: {} });
+  const familyOf = key => cards.find(card => card.cardKey === key)?.families[0];
+
+  const opus = familyOf('opus|5.5|');
+  assert.deepEqual(opus.cells.map(cell => cell.label), ['L', 'M', 'H', 'xH', 'Max'],
+    'one cell per effort order, not per Fast variant');
+  assert.deepEqual(opus.toggles, ['Fast Mode'],
+    'Thinking/1M Context stay hidden because they do not vary');
+  assert.equal(opus.familyLabel, 'Claude Opus 5.5');
+  assert.equal(picker.matchVariant(opus, 1, { 'Fast Mode': 1 }).uid, 'claude-opus-5-5-medium-fast');
+  assert.equal(picker.matchVariant(opus, 1, { 'Fast Mode': 0 }).uid, 'claude-opus-5-5-medium');
+
+  const sol = familyOf('sol|5.6|');
+  assert.deepEqual(sol.cells.map(cell => cell.label), ['Off', 'L', 'M', 'H', 'xH', 'Max']);
+  assert.deepEqual(sol.toggles, ['Fast Mode'], 'Prompt Cache Retention never varies');
+
+  const glm = familyOf('glm|5.3|');
+  assert.deepEqual(glm.cells.map(cell => cell.label), ['L', 'H', 'Max']);
+  assert.deepEqual(glm.toggles, [], '1M Context is 1 on every variant → no toggle');
+
+  const flash = familyOf('swe|2|flash');
+  assert.deepEqual(flash.cells.map(cell => cell.label), ['M', 'H', 'Max']);
+  assert.deepEqual(flash.toggles, ['Fast Mode'], 'Lightning variants differ only by Fast Mode');
+
+  const adaptive = familyOf('adaptive||');
+  assert.deepEqual(adaptive.cells, []);
+  assert.deepEqual(adaptive.toggles, []);
+});
+
+test('groupFusion groups real native lead candidates per family', () => {
+  const candidates = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'fixtures/real-fusion-candidates.json'), 'utf8'));
+  const cards = picker.groupFusion(candidates.leads, new Map());
+  const fable = cards.find(card => card.familyLabel === 'Claude Fable 5.2');
+  assert.ok(fable, 'Claude Fable 5.2 variants collapse into one card');
+  assert.equal(fable.name, 'Fable');
+  assert.equal(fable.version, '5.2');
+  assert.deepEqual(fable.cells.map(cell => cell.label), ['L', 'M', 'H', 'xH', 'Max'],
+    'cells ordered by candidate effortOrder');
+  assert.equal(fable.variants.length, 5);
+  const astra = cards.find(card => card.familyLabel === 'GPT-6.2 Astra');
+  assert.equal(astra.name, 'Astra');
+  assert.equal(astra.version, '6.2');
+  assert.equal(astra.variant, '', 'no "High Thinking" variant text');
+  assert.ok(!cards.some(card => /Thinking/.test(card.variant || '')));
 });
 
 test('picker.js never uses CSP-forbidden DOM APIs', () => {
