@@ -16,8 +16,9 @@ const API = '/exa.api_server_pb.ApiServerService/';
 const fixtureJson = JSON.parse(fs.readFileSync(__dirname + '/fixtures/real-picker-0.3.11.json', 'utf8'));
 const upstream = { clientModelConfigs: [
   ...fixtureJson.natives.map(record => ({ modelUid: record.uid, label: record.label, disabled: !!record.disabled,
-    modelInfo: { harnessUids: record.harnesses || [], isModelRouter: !!record.router },
-    ...(record.family?.length ? { modelFamilyMetadata: { entries: record.family.map(dim => ({ key: dim.key, value: { order: dim.order, name: dim.name } })) } } : {}) })),
+    modelInfo: { harnessUids: record.harnesses || [], isModelRouter: !!record.router, modelFamilyUid: record.uid + '-fam' },
+    ...(record.family?.length ? { modelFamilyMetadata: { modelFamilyLabel: 'Fam ' + record.uid,
+      entries: record.family.map(dim => ({ key: dim.key, value: { order: dim.order, name: dim.name } })) } } : {}) })),
   ...fixtureJson.fusions.map(record => ({ modelUid: record.uid, label: record.label, disabled: !!record.disabled,
     modelInfo: { harnessUids: ['fusion'], isModelRouter: true },
     modelFamilyMetadata: { entries: (record.family || []).map(dim => ({ key: dim.key, value: { order: dim.order, name: dim.name } })) } })),
@@ -64,6 +65,10 @@ test('readNativeModels returns the backend observed catalog with dimensions inta
   assert.equal(result.status, 'ready');
   const luna = result.models.find(entry => entry.uid === 'gpt-5-6-luna-high');
   assert.deepEqual(luna?.sidekickDimension, undefined, 'plain natives carry no dimension');
+  const fable = result.models.find(entry => entry.uid === 'claude-fable-5-1-medium');
+  assert.equal(fable?.familyUid, 'claude-fable-5-1-medium-fam', 'familyUid survives the whitelist');
+  assert.equal(fable?.familyLabel, 'Fam claude-fable-5-1-medium', 'familyLabel survives the whitelist');
+  assert.deepEqual(fable?.modelEffortDimension, { order: 1, name: 'Medium' }, 'own effort dimension preserved');
   const official = result.models.find(entry => entry.uid === 'fusion-claude-fable-5-1-medium-sidekick-gpt-5-6-luna-high');
   assert.deepEqual(official.sidekickDimension, { order: 4, name: 'GPT-5.6 Luna High', fastModeOrder: 0 });
   assert.ok(result.models.length >= 19, 'all sanitized upstream records are exposed');
@@ -135,6 +140,23 @@ test('backend observations remain scoped to the live instance', async t => {
   const raw = await fetch(f.base + '/_runtime/native-models', { headers: { authorization: 'Bearer ' + control.token } });
   const body = await raw.json();
   assert.ok(body.models.length > 0, 'backend records persist per instance until replaced by fresh observations');
+});
+
+test('readNativeModels drops invalid family fields instead of failing', async t => {
+  const natives = { clientModelConfigs: [
+    { modelUid: 'ok-m', label: 'OK', modelInfo: { harnessUids: [], isModelRouter: false, modelFamilyUid: 'ok-fam' },
+      modelFamilyMetadata: { modelFamilyLabel: 'OK Fam', entries: [{ key: 'Effort', value: { order: 0, name: 'Low' } }] } },
+    { modelUid: 'bad-m', label: 'Bad', modelInfo: { harnessUids: [], isModelRouter: false, modelFamilyUid: 'x'.repeat(300) } },
+  ] };
+  const f = await backendFixture(t, { natives });
+  await fetch(f.base + API + 'GetCliModelConfigs', { method: 'POST', body: 'trigger' });
+  const result = await readNativeModels({ root: f.root, port: f.backend.port });
+  const ok = result.models.find(entry => entry.uid === 'ok-m');
+  assert.equal(ok?.familyUid, 'ok-fam');
+  assert.equal(ok?.familyLabel, 'OK Fam');
+  assert.deepEqual(ok?.modelEffortDimension, { order: 0, name: 'Low' });
+  const bad = result.models.find(entry => entry.uid === 'bad-m');
+  assert.equal(bad?.familyUid, undefined, 'oversized familyUid dropped');
 });
 
 test('readNativeModels retries a reset pooled connection once and still fails on other errors', async () => {

@@ -190,6 +190,56 @@ test('groupFusion groups real native lead candidates per family', () => {
   assert.ok(!cards.some(card => /Thinking/.test(card.variant || '')));
 });
 
+test('groupCards treats credit models with tier free as free', () => {
+  const card = picker.groupCards([
+    { modelUid: 'm-tier', familyUid: 'fam-tier', label: 'Freemodel 1', familyMetadata: {},
+      modelCost: { type: 'credit', tier: 'free' } },
+    { modelUid: 'm-paid', familyUid: 'fam-paid', label: 'Paidmodel 1', familyMetadata: {},
+      modelCost: { type: 'credit', tier: 'paid' } },
+  ], {});
+  assert.equal(card.find(c => c.name === 'Freemodel').families[0].free, true, 'tier free counts');
+  assert.equal(card.find(c => c.name === 'Paidmodel').families[0].free, false);
+});
+
+test('groupFusion falls back to visibleModelConfigs when candidates lack family fields', () => {
+  const vmc = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'fixtures/real-vmc.json'), 'utf8'));
+  const index = new Map(vmc.map(model => [model.modelUid, model]));
+  // Live-backend shape before the whitelist fix: no familyLabel/effortOrder,
+  // familyKey is just the uid — one candidate per effort variant.
+  const effortOf = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' };
+  const candidates = ['claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high',
+    'claude-opus-5-5-xhigh', 'claude-opus-5-5-max', 'claude-opus-5-5-medium-fast']
+    .map(uid => { const suffix = uid.split('5-5-')[1];
+      return { ref: { kind: 'native', uid }, label: 'Claude Opus 5.5 ' + suffix,
+        providerName: 'Devin', effort: effortOf[suffix.replace('-fast', '')], familyKey: uid }; });
+  const cards = picker.groupFusion(candidates, index);
+  assert.equal(cards.length, 1, 'all efforts collapse into one family card');
+  assert.equal(cards[0].familyLabel, 'Claude Opus 5.5');
+  assert.equal(cards[0].name, 'Opus');
+  assert.deepEqual(cards[0].cells.map(cell => cell.label), ['L', 'M', 'H', 'xH', 'Max']);
+  assert.deepEqual(cards[0].toggles, ['Fast Mode']);
+});
+
+test('pickFusionSlots prefers the current fusion value, then the saved draft', () => {
+  const candidates = {
+    leads: [{ ref: { kind: 'native', uid: 'lead-a' } }, { ref: { kind: 'byok', uid: 'lead-b' } }],
+    sidekicks: [{ ref: { kind: 'native', uid: 'side-a' } }, { ref: { kind: 'native', uid: 'side-b' } }],
+  };
+  const state = { fusionSlots: { a: { lead: { kind: 'native', uid: 'lead-a' },
+    sidekick: { kind: 'native', uid: 'side-a' } } } };
+  const draft = { lead: { kind: 'byok', uid: 'lead-b' }, sidekick: { kind: 'native', uid: 'side-b' } };
+  const fromValue = picker.pickFusionSlots('fusion-dmp-a', state, candidates, draft);
+  assert.deepEqual(fromValue.lead, { kind: 'native', uid: 'lead-a' }, 'current value wins');
+  assert.deepEqual(fromValue.sidekick, { kind: 'native', uid: 'side-a' });
+  const fromDraft = picker.pickFusionSlots('claude-opus-5-5-medium', state, candidates, draft);
+  assert.deepEqual(fromDraft.lead, { kind: 'byok', uid: 'lead-b' }, 'non-fusion value falls back to draft');
+  assert.deepEqual(fromDraft.sidekick, { kind: 'native', uid: 'side-b' });
+  const invalid = picker.pickFusionSlots('claude-opus-5-5-medium', state, candidates,
+    { lead: { kind: 'native', uid: 'gone' }, sidekick: { kind: 'native', uid: 'side-b' } });
+  assert.equal(invalid.lead, null, 'draft refs that are no longer candidates are dropped');
+  assert.deepEqual(invalid.sidekick, { kind: 'native', uid: 'side-b' });
+});
+
 test('picker.js never uses CSP-forbidden DOM APIs', () => {
   const source = fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8');
   for (const banned of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'eval(', 'new Function', 'document.write']) {

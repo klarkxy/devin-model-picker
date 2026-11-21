@@ -119,6 +119,30 @@ test('native+native selection returns the official fusion uid shortcut', async t
   assert.equal(wrote.length, 0, 'official shortcut must not touch config');
 });
 
+test('native fusion candidates carry family identity from observed natives', () => {
+  const { buildCatalog, collectNativeModels } = require('../src/catalog.cjs');
+  const { candidates } = require('../src/picker-api.cjs');
+  const natives = { clientModelConfigs: [
+    { modelUid: 'lead-n', label: 'Lead N',
+      modelInfo: { harnessUids: ['swe-1p5'], isModelRouter: false, modelFamilyUid: 'fam-lead-n' },
+      modelFamilyMetadata: { modelFamilyLabel: 'Lead N Fam',
+        entries: [{ key: 'Effort', value: { order: 2, name: 'High' } }] } },
+    { modelUid: 'side-n', label: 'Side N', modelInfo: { harnessUids: ['swe-1p6'], isModelRouter: false } },
+    { modelUid: 'fusion-lead-n-sidekick-side-n', label: 'F', modelInfo: { harnessUids: ['fusion'], isModelRouter: true },
+      modelFamilyMetadata: { entries: [
+        { key: 'Lead', value: { order: 1, name: 'Lead N' } },
+        { key: 'Effort', value: { order: 2, name: 'High' } },
+        { key: 'Sidekick', value: { order: 1, name: 'Side N' } },
+      ] } },
+  ] };
+  const observed = collectNativeModels(natives, { rpc: 'GetCliModelConfigs', format: { json: true } });
+  const catalog = buildCatalog({ providers: providers() }, observed);
+  const lead = candidates(catalog, { providers: providers() }).leads.find(c => c.ref.uid === 'lead-n');
+  assert.equal(lead.familyKey, 'fam-lead-n', 'familyKey is the family uid, not the model uid');
+  assert.equal(lead.familyLabel, 'Lead N Fam');
+  assert.equal(lead.effortOrder, 2);
+});
+
 test('/picker/fusion returns 503 while the extension is disabled', async t => {
   const f = await fixture(t, { enabled: false, providers: providers() });
   const res = await fetch(f.base + '/picker/fusion', { method: 'POST',

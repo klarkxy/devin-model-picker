@@ -38,6 +38,12 @@ async function readNativeModels({ root, port = PORT, signal, request = fetch }) 
       entry.harnessUids.some(uid => typeof uid !== 'string')) throw new Error('native_catalog_invalid');
     const next = { uid: entry.uid, label: typeof entry.label === 'string' ? entry.label : entry.uid,
       disabled: entry.disabled, isModelRouter: entry.isModelRouter, harnessUids: entry.harnessUids };
+    if (typeof entry.familyUid === 'string' && entry.familyUid && entry.familyUid.length <= 256) next.familyUid = entry.familyUid;
+    if (typeof entry.familyLabel === 'string' && entry.familyLabel && entry.familyLabel.length <= 256) next.familyLabel = entry.familyLabel;
+    const effort = entry.modelEffortDimension;
+    if (effort && Number.isSafeInteger(effort.order) && effort.order >= 0 && effort.order <= 0x7fffffff &&
+        typeof effort.name === 'string' && effort.name)
+      next.modelEffortDimension = { order: effort.order, name: effort.name };
     const d = entry.sidekickDimension;
     if (d && Number.isSafeInteger(d.order) && d.order >= 0 && d.order <= 0x7fffffff && typeof d.name === 'string' && d.name &&
       (d.fastModeOrder === undefined || Number.isSafeInteger(d.fastModeOrder) && d.fastModeOrder >= 0))

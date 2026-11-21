@@ -137,7 +137,11 @@
     "name": ""
    }
   },
-  "displayOption": "standard-picker"
+  "displayOption": "standard-picker",
+  "modelCost": {
+   "type": "credit",
+   "tier": "free"
+  }
  },
  {
   "modelUid": "adaptive",
@@ -909,7 +913,11 @@
     "name": ""
    }
   },
-  "displayOption": "standard-picker"
+  "displayOption": "standard-picker",
+  "modelCost": {
+   "type": "credit",
+   "tier": "free"
+  }
  },
  {
   "modelUid": "swe-2-max",

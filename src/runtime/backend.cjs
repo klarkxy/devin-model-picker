@@ -47,9 +47,15 @@ async function startBackend({ root, port = PORT, log = () => {} }) {
     for (const entry of entries) {
       if (!entry || typeof entry.uid !== 'string' || !entry.uid) continue;
       const dimension = entry.sidekickDimension;
+      const effort = entry.modelEffortDimension;
       observedNatives.set(entry.uid, { uid: entry.uid, label: typeof entry.label === 'string' ? entry.label : '',
         disabled: entry.disabled === true, isModelRouter: entry.isModelRouter === true,
         harnessUids: Array.isArray(entry.harnessUids) ? entry.harnessUids.filter(value => typeof value === 'string') : [],
+        ...(typeof entry.familyUid === 'string' && entry.familyUid && entry.familyUid.length <= 256 ? { familyUid: entry.familyUid } : {}),
+        ...(typeof entry.familyLabel === 'string' && entry.familyLabel && entry.familyLabel.length <= 256 ? { familyLabel: entry.familyLabel } : {}),
+        ...(effort && Number.isSafeInteger(effort.order) && effort.order >= 0 && effort.order <= 0x7fffffff &&
+            typeof effort.name === 'string' && effort.name
+          ? { modelEffortDimension: { order: effort.order, name: effort.name } } : {}),
         ...(dimension && typeof dimension === 'object'
           ? { sidekickDimension: { order: dimension.order, name: dimension.name, fastModeOrder: dimension.fastModeOrder } } : {}),
         ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),

@@ -193,14 +193,18 @@ function exactVariant(family, effortOrder, toggles) {
     && (family.toggles || []).every(key => (variant.toggles?.[key] || 0) === (toggles?.[key] || 0))) || null;
 }
 
-// Card-level switches (Fast, 1M, ...) rendered once in the card header. A
+// Card-level switches (Fast, 1M, ...) rendered in the card's subtitle row. A
 // switch is disabled when flipping it has no exact variant at the current effort.
 function toggleSwitches(family, cardState, disabled, onFlip) {
   const row = el('span', 'dmp-togs');
   for (const key of family.toggles || []) {
     const on = (cardState.toggles[key] || 0) !== 0;
     const next = { ...cardState.toggles, [key]: on ? 0 : 1 };
-    const pill = el('button', 'dmp-tog' + (on ? ' dmp-on' : ''), toggleLabel(key));
+    const pill = el('button', 'dmp-tog' + (on ? ' dmp-on' : ''));
+    const track = el('span', 'dmp-tog-track');
+    track.appendChild(el('span', 'dmp-tog-knob'));
+    pill.appendChild(track);
+    pill.appendChild(el('span', 'dmp-tog-txt', toggleLabel(key)));
     pill.setAttribute('aria-pressed', String(on));
     const target = cardState.effortOrder != null ? exactVariant(family, cardState.effortOrder, next) : null;
     if (disabled || (cardState.effortOrder != null && !target)) {
@@ -252,7 +256,8 @@ function groupCards(models, state) {
       uid, label: String(model.label || uid), effort, effortOrder, toggles,
       disabled: model.disabled === true, disabledReason: model.disabledReason,
       isDefault: byokEntry ? byokEntry.effort === null : model.isDefaultModelInFamily === true,
-      free: model.modelCost?.type === 'free', supportsImages: model.supportsImages !== false,
+      free: model.modelCost?.type === 'free' || model.modelCost?.tier === 'free',
+      supportsImages: model.supportsImages !== false,
     };
     // BYOK labels carry the effort suffix ('… High'); the model id is the
     // stable name basis so every effort variant lands on the same card.
@@ -304,25 +309,26 @@ function groupFusion(candidates, nativeIndex) {
     const ref = candidate?.ref;
     if (!ref || typeof ref.uid !== 'string') continue;
     const nativeEntry = ref.kind === 'native' ? nativeIndex?.get(ref.uid) : undefined;
-    // Candidates carry familyUid/familyLabel/effortOrder from the backend;
-    // visibleModelConfigs is only a fallback for older backends.
-    const familyKey = candidate.familyKey || nativeEntry?.familyUid || ref.uid;
+    // Family identity prefers the live visibleModelConfigs entry — backends
+    // that drop family fields emit familyKey = uid; candidate fields are the
+    // fallback when the entry is not in the visible list.
     const { effort: effortDim, toggles: toggleDims } = dimRoles(nativeEntry?.familyMetadata);
+    const familyKey = (ref.kind === 'native' && nativeEntry?.familyUid) || candidate.familyKey || ref.uid;
     const effort = candidate.effort ?? (effortDim ? effortDim[1].name : null);
     // Same aggregation as single mode: BYOK null = default (no cell), native
     // effort orders become deduplicated cells.
-    const effortOrder = candidate.effortOrder ?? (ref.kind === 'byok'
-      ? (candidate.effort == null ? null : (EFFORT_ORDER[String(candidate.effort).toLowerCase()] ?? 1e9))
-      : (effortDim ? effortDim[1].order : null));
+    const effortOrder = ref.kind === 'byok'
+      ? (candidate.effortOrder ?? (candidate.effort == null ? null : (EFFORT_ORDER[String(candidate.effort).toLowerCase()] ?? 1e9)))
+      : (effortDim ? effortDim[1].order : (candidate.effortOrder ?? null));
     const toggles = Object.fromEntries(toggleDims.map(([key, val]) => [key, Number(val.order) || 0]));
-    const parsed = cardName(candidate.familyLabel || nativeEntry?.familyLabel || candidate.label);
+    const parsed = cardName(nativeEntry?.familyLabel || candidate.familyLabel || candidate.label);
     const key = (ref.kind === 'byok' ? 'b:' : 'n:') + familyKey;
     if (!cards.has(key)) cards.set(key, { ...parsed, cardKey: key, providerName: candidate.providerName,
       vendor: ref.kind === 'byok' ? 'other' : 'windsurf', variants: [], familyLabel: '' });
     const card = cards.get(key);
     if (!card.familyLabel) {
-      let base = candidate.familyLabel || (ref.kind === 'native' && nativeEntry?.familyLabel) || stripProvider(candidate.label || '');
-      if (!candidate.familyLabel && effort && base.endsWith(' ' + effort)) base = base.slice(0, -effort.length - 1);
+      let base = (ref.kind === 'native' && nativeEntry?.familyLabel) || candidate.familyLabel || stripProvider(candidate.label || '');
+      if (!nativeEntry?.familyLabel && !candidate.familyLabel && effort && base.endsWith(' ' + effort)) base = base.slice(0, -effort.length - 1);
       card.familyLabel = base;
     }
     card.variants.push({ ref, uid: ref.uid, label: candidate.label, effort, effortOrder, toggles,
@@ -372,6 +378,24 @@ function prefillFusion(value, state, candidates) {
   return result;
 }
 
+// Validates a saved fusion draft against the current candidates: each ref must
+// still be a candidate in its own role.
+function validDraft(draft, candidates) {
+  const take = (ref, list) => ref && (ref.kind === 'native' || ref.kind === 'byok') && typeof ref.uid === 'string' &&
+    (list || []).some(item => item.ref.kind === ref.kind && item.ref.uid === ref.uid)
+    ? { kind: ref.kind, uid: ref.uid } : null;
+  if (!draft || typeof draft !== 'object') return { lead: null, sidekick: null };
+  return { lead: take(draft.lead, candidates?.leads), sidekick: take(draft.sidekick, candidates?.sidekicks) };
+}
+
+// Fusion slot prefill precedence: the current fusion value wins, then the
+// saved draft, then empty. Each slot falls through independently.
+function pickFusionSlots(value, state, candidates, draft) {
+  const prefill = prefillFusion(value, state, candidates);
+  const backup = validDraft(draft, candidates);
+  return { lead: prefill.lead || backup.lead, sidekick: prefill.sidekick || backup.sidekick };
+}
+
 const PICKER_ORIGIN = 'vscode-file://vscode-app';
 const API_BASE = 'http://127.0.0.1:39852';
 const LS_KEY = 'devin-model-picker:v1';
@@ -379,6 +403,7 @@ const LS_KEY = 'devin-model-picker:v1';
 const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, baseLabel,
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
   underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
+  validDraft, pickFusionSlots,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
 if (typeof module === 'object' && module.exports) { module.exports = exportsMap; return; }
 
@@ -426,7 +451,8 @@ const CSS = `
 .dmp-name{font-weight:700;line-height:1.15;word-break:break-word}
 .dmp-ver{font-size:.62em;font-weight:600;color:var(--dmp-muted);vertical-align:super;margin-left:2px}
 .dmp-var{font-size:.68em;font-weight:500;color:var(--dmp-muted);margin-left:4px}
-.dmp-sub{font-size:11px;color:var(--dmp-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dmp-sub{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dmp-muted)}
+.dmp-sub-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dmp-eff{display:flex;gap:3px;margin-top:auto}
 .dmp-eff button{flex:1;border:1px solid var(--dmp-border);border-radius:6px;background:transparent;
  color:var(--dmp-muted);font-size:10px;padding:2px 0;cursor:pointer;min-width:0;
@@ -434,10 +460,15 @@ const CSS = `
 .dmp-eff button:hover{color:var(--dmp-fg);border-color:var(--dmp-muted)}
 .dmp-eff button.dmp-on{background:var(--dmp-sel);border-color:var(--dmp-sel);color:#fff}
 .dmp-eff button:disabled{opacity:.4;cursor:default}
-.dmp-togs{display:flex;gap:3px}
-.dmp-tog{border:1px solid var(--dmp-border);border-radius:999px;background:var(--dmp-chip);
- color:var(--dmp-muted);font-size:9px;padding:1px 7px;cursor:pointer}
-.dmp-tog.dmp-on{background:var(--dmp-sel);border-color:var(--dmp-sel);color:#fff}
+.dmp-togs{display:flex;gap:6px;flex:none;margin-left:auto}
+.dmp-tog{display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;
+ color:var(--dmp-muted);font-size:10px;padding:0;cursor:pointer}
+.dmp-tog-track{position:relative;width:17px;height:10px;border-radius:999px;flex:none;
+ background:var(--dmp-track);border:1px solid var(--dmp-border);box-sizing:border-box}
+.dmp-tog-knob{position:absolute;top:1px;left:1px;width:6px;height:6px;border-radius:50%;
+ background:var(--dmp-muted)}
+.dmp-tog.dmp-on .dmp-tog-track{background:var(--dmp-sel);border-color:var(--dmp-sel)}
+.dmp-tog.dmp-on .dmp-tog-knob{left:8px;background:#fff}
 .dmp-tog:disabled{opacity:.4;cursor:default}
 .dmp-foot{padding:7px 12px;border-top:1px solid var(--dmp-border);font-size:11px;
  color:var(--dmp-muted);display:flex;align-items:center;gap:8px}
@@ -531,6 +562,19 @@ function saveProvider(key, providerName) {
   } catch {}
 }
 
+// Unapplied fusion picks survive across opens: { lead, sidekick } refs only.
+function loadDraft() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}').fusionDraft || null; } catch { return null; }
+}
+function saveDraft() {
+  try {
+    const data = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    const slots = panelState?.fusionSlots || {};
+    data.fusionDraft = { lead: slots.lead || null, sidekick: slots.sidekick || null };
+    localStorage.setItem(LS_KEY, JSON.stringify(data));
+  } catch {}
+}
+
 // Panel ----------------------------------------------------------------------
 let styleNode = null;
 let panel = null;
@@ -568,9 +612,45 @@ function isDark(anchor) {
 
 function currentValue(located) { return located?.root?.value; }
 
-function selectModel(located, uid) {
-  try { located.host.onModelSelect({ modelUid: uid }); } catch {}
-  closePanel();
+// Select through the freshly located host (props die with each React render),
+// keep the panel open, optimistically update our copy of the current value,
+// then re-read it from live props once React has settled.
+function selectModel(uid) {
+  if (!panelState) return;
+  if (panelState.trigger?.isConnected) {
+    const fresh = locateTrigger(panelState.trigger);
+    if (fresh) panelState.located = fresh;
+  }
+  try { panelState.located?.host.onModelSelect({ modelUid: uid }); } catch {}
+  panelState.value = uid;
+  panelState.pendingUid = uid;
+  rerenderGrid();
+  // Existing sessions switch only after the ACP round-trip: keep the optimistic
+  // value until live props confirm it, and accept whatever is live at the end.
+  for (const delay of [60, 300, 1000]) setTimeout(() => refreshLocated(false), delay);
+  setTimeout(() => refreshLocated(true), 2500);
+}
+
+// Re-walk the trigger's fiber chain — rebinding to a replacement trigger when
+// React detached ours — and sync value/located from live props.
+function refreshLocated(final) {
+  if (!panel || !panelState) return;
+  let trigger = panelState.trigger;
+  if (!trigger?.isConnected) {
+    trigger = [...document.querySelectorAll('button[aria-haspopup="menu"][data-dmp-bound]')]
+      .find(button => button.isConnected && locateTrigger(button)) || null;
+    if (!trigger) return;
+    panelState.trigger = trigger;
+  }
+  const located = locateTrigger(trigger);
+  if (!located) return;
+  panelState.located = located;
+  const live = currentValue(located);
+  if (panelState.pendingUid && live !== panelState.pendingUid && !final) return;
+  panelState.pendingUid = null;
+  if (live === panelState.value) return;
+  panelState.value = live;
+  rerenderGrid();
 }
 
 function chooseFamily(card, located) {
@@ -582,10 +662,10 @@ function chooseFamily(card, located) {
 
 // Per-card local state: which effort + toggles the card would select. The
 // current family mirrors the live variant; others start from their default.
-function cardStateFor(card, family, located) {
+function cardStateFor(card, family) {
   const key = card.cardKey + '|' + (family.providerName || '');
   if (!panelState.cardStates.has(key)) {
-    const value = currentValue(located);
+    const value = panelState.value;
     const live = family.variants.find(variant => variant.uid === value);
     const def = live || defaultVariant(family);
     panelState.cardStates.set(key, {
@@ -600,7 +680,7 @@ function buildCard(card, index, located) {
   const family = chooseFamily(card, located);
   const node = el('div', 'dmp-card');
   node.setAttribute('data-dmp-key', card.cardKey);
-  const value = currentValue(located);
+  const value = panelState.value;
   const allUids = card.families.flatMap(item => item.variants.map(variant => variant.uid));
   const selected = allUids.includes(value);
   if (selected) node.classList.add('dmp-sel');
@@ -608,7 +688,7 @@ function buildCard(card, index, located) {
   const cardDisabled = enabledVariants.length === 0;
   if (cardDisabled) { node.classList.add('dmp-off'); node.title = family.variants[0]?.disabledReason || ''; }
   const live = family.variants.find(variant => variant.uid === value);
-  const cardState = cardStateFor(card, family, located);
+  const cardState = cardStateFor(card, family);
   if (live) {
     // The current family mirrors the live variant's effort + toggles.
     cardState.effortOrder = live.effortOrder ?? cardState.effortOrder;
@@ -624,9 +704,6 @@ function buildCard(card, index, located) {
   const chip = el('button', 'dmp-prov', family.providerName || 'Devin');
   chip.title = card.families.length > 1 ? '切换供应商' : '';
   top.appendChild(chip);
-  if ((family.toggles || []).length) top.appendChild(toggleSwitches(family, cardState, cardDisabled, target => {
-    if (live && target) selectModel(located, target.uid); else rerenderGrid();
-  }));
   node.appendChild(top);
 
   const nameRow = el('div');
@@ -638,8 +715,12 @@ function buildCard(card, index, located) {
   if (card.variant) nameRow.appendChild(el('span', 'dmp-var', card.variant));
   node.appendChild(nameRow);
 
-  node.appendChild(el('div', 'dmp-sub', (family.familyLabel || card.name) + ' · ' + (family.providerName || 'Devin')));
-
+  const sub = el('div', 'dmp-sub');
+  sub.appendChild(el('span', 'dmp-sub-txt', (family.familyLabel || card.name) + ' · ' + (family.providerName || 'Devin')));
+  if ((family.toggles || []).length) sub.appendChild(toggleSwitches(family, cardState, cardDisabled, target => {
+    if (live && target) selectModel(target.uid); else rerenderGrid();
+  }));
+  node.appendChild(sub);
 
   if (family.cells.length) {
     const eff = el('div', 'dmp-eff');
@@ -651,7 +732,7 @@ function buildCard(card, index, located) {
         event.stopPropagation();
         cardState.effortOrder = cell.order;
         const target = matchVariant(family, cell.order, cardState.toggles);
-        if (target) selectModel(located, target.uid);
+        if (target) selectModel(target.uid);
       });
       eff.appendChild(btn);
     }
@@ -684,7 +765,7 @@ function buildCard(card, index, located) {
     node.addEventListener('click', () => {
       const order = cardState.effortOrder ?? defaultVariant(family)?.effortOrder ?? null;
       const target = (order != null ? matchVariant(family, order, cardState.toggles) : null) || defaultVariant(family);
-      if (target && !target.disabled) selectModel(located, target.uid);
+      if (target && !target.disabled) selectModel(target.uid);
     });
   }
   return node;
@@ -715,7 +796,9 @@ function buildFusionCard(card, index, located, state) {
   if (card.version) nameRow.appendChild(el('span', 'dmp-ver', card.version));
   if (card.variant) nameRow.appendChild(el('span', 'dmp-var', card.variant));
   node.appendChild(nameRow);
-  node.appendChild(el('div', 'dmp-sub', (card.familyLabel || card.name) + ' · ' + (card.providerName || 'Devin')));
+  const sub = el('div', 'dmp-sub');
+  sub.appendChild(el('span', 'dmp-sub-txt', (card.familyLabel || card.name) + ' · ' + (card.providerName || 'Devin')));
+  node.appendChild(sub);
 
   const fkey = card.cardKey;
   if (!panelState.cardStates.has(fkey)) {
@@ -735,13 +818,15 @@ function buildFusionCard(card, index, located, state) {
     if (!variant || blocked) return;
     slots[panelState.activeSlot] = variant.ref;
     if (panelState.activeSlot === 'lead' && !slots.sidekick) panelState.activeSlot = 'sidekick';
+    saveDraft();
     rerenderGrid();
   };
-  if ((card.toggles || []).length) top.appendChild(toggleSwitches(card, cardState, blocked, target => {
+  if ((card.toggles || []).length) sub.appendChild(toggleSwitches(card, cardState, blocked, target => {
     // A slot already holding this card follows the switch.
     for (const slot of ['lead', 'sidekick']) {
       if (target && slots[slot] && card.variants.some(variant => variant.ref.kind === slots[slot].kind && variant.ref.uid === slots[slot].uid)) slots[slot] = target.ref;
     }
+    saveDraft();
     rerenderGrid();
   }));
   if (card.cells.length) {
@@ -837,12 +922,13 @@ function renderFusionFooter() {
   apply.addEventListener('click', async () => {
     err.textContent = '';
     apply.disabled = true;
+    saveDraft();
     try {
       const result = await postFusion({ lead: slots.lead, sidekick: slots.sidekick,
-        currentUid: currentValue(panelState.located) });
+        currentUid: panelState.value });
       if (result.error === 'same_model') { err.textContent = '两个槽位不能使用同一模型'; apply.disabled = false; foot.prepend(err); return; }
       if (result.error === 'invalid_ref') { err.textContent = '所选模型不可用'; apply.disabled = false; foot.prepend(err); return; }
-      if (result.uid) { selectModel(panelState.located, result.uid); return; }
+      if (result.uid) { selectModel(result.uid); return; }
       err.textContent = '本地服务错误'; apply.disabled = false;
     } catch {
       err.textContent = '本地服务未就绪'; apply.disabled = false;
@@ -910,7 +996,7 @@ function openPanel(trigger, located) {
   document.body.appendChild(panel);
   void fetchState().then(() => {
     if (!panelState) return;
-    const prefill = prefillFusion(panelState.value, lastState, lastState?.fusionCandidates);
+    const prefill = pickFusionSlots(panelState.value, lastState, lastState?.fusionCandidates, loadDraft());
     panelState.fusionSlots.lead = panelState.fusionSlots.lead || prefill.lead;
     panelState.fusionSlots.sidekick = panelState.fusionSlots.sidekick || prefill.sidekick;
     slotRow.replaceChildren(slotChip('lead', '主模型'), slotChip('sidekick', '辅助模型'));
