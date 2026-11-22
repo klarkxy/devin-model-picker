@@ -17,6 +17,8 @@ npm run package   # 产出 devin-model-picker-<version>.vsix
 
 然后在 Devin 中「从 VSIX 安装」。也可以直接从 [Releases](https://github.com/klarkxy/devin-model-picker/releases/latest) 下载打包好的 `.vsix`。
 
+已安装的扩展每 6 小时自动检查 GitHub Releases 并提示更新；也可在命令面板执行「Model Picker：检查更新」手动检查。
+
 > **注意**：本扩展会向 Devin 的 `workbench.html` 注入一个 `<script>` 标签并更新 `product.json` 校验和，用于加载选择器脚本。每次激活时自动重新应用（Devin 升级后会自愈）；卸载扩展或执行「停用并恢复」会移除注入。若安装目录无写权限会在通知中提示。
 
 ## 设置

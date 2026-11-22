@@ -140,6 +140,10 @@ async function activate(context) {
     vscode.window.showErrorMessage('检测到旧版 Devin Fusion BYOK 仍在启用，请先停用它再重新加载窗口');
     return;
   }
+  // Self-update runs even while the plugin is disabled via config: a broken or
+  // disabled copy should still be able to offer a fix release.
+  try { require('./update.cjs').createUpdateHost({ vscode, context, log }); }
+  catch { log('update-host-unavailable'); }
   const root = context.globalStorageUri.fsPath, configFile = path.join(root, 'config.json');
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   if (!fs.existsSync(configFile)) writeConfig(configFile, importLegacy());
