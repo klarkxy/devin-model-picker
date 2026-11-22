@@ -137,6 +137,12 @@ async function pickerFusion(body, { catalog, config, configFile, writeConfig, ob
     const observed = observedNatives?.get(officialUid);
     if (observed && observed.disabled !== true) return { status: 200, body: { uid: officialUid } };
   }
+  // Re-selecting the pair a slot already holds is a no-op: keep that uid
+  // instead of rewriting the other slot.
+  const slots = config.fusionSlots && typeof config.fusionSlots === 'object' ? config.fusionSlots : {};
+  const sameRef = (a, b) => a?.kind === b?.kind && a?.uid === b?.uid;
+  const held = ['a', 'b'].find(key => sameRef(slots[key]?.lead, body.lead) && sameRef(slots[key]?.sidekick, body.sidekick));
+  if (held) return { status: 200, body: { uid: 'fusion-dmp-' + held } };
   const slot = body.currentUid === 'fusion-dmp-a' ? 'b' : 'a';
   const next = { ...config, fusionSlots: { ...(config.fusionSlots || {}),
     [slot]: { lead: { kind: body.lead.kind, uid: body.lead.uid }, sidekick: { kind: body.sidekick.kind, uid: body.sidekick.uid } } } };

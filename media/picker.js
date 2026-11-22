@@ -382,7 +382,8 @@ function prefillFusion(value, state, candidates) {
 }
 
 // Card preferences: order/favorites/hidden/aliases keyed by the canonical
-// cardKey ('name|version|variant', lowercase) — shared by both modes.
+// cardKey ('name|version|variant', lowercase). Three independent lists —
+// single tab, fusion lead slot, fusion sidekick slot.
 function sanitizePrefs(raw) {
   const out = { order: [], favorites: [], hidden: [], aliases: {} };
   if (!raw || typeof raw !== 'object') return out;
@@ -398,6 +399,24 @@ function sanitizePrefs(raw) {
     }
   }
   return out;
+}
+
+// Legacy storage has only data.prefs (flat) → single. Missing fusion lists
+// start as a copy of single without its hidden keys.
+function prefSets(data) {
+  const single = sanitizePrefs(data?.prefs);
+  const fusion = data?.fusionPrefs && typeof data.fusionPrefs === 'object' ? data.fusionPrefs : {};
+  const seed = () => ({ ...sanitizePrefs(single), hidden: [] });
+  return { single, lead: fusion.lead ? sanitizePrefs(fusion.lead) : seed(),
+    sidekick: fusion.sidekick ? sanitizePrefs(fusion.sidekick) : seed() };
+}
+
+// Keys not yet in order go to the end, in the given order. Returns the same
+// array when nothing is new.
+function appendNewKeys(order, keys) {
+  const seen = new Set(order);
+  const fresh = (keys || []).filter(key => !seen.has(key));
+  return fresh.length ? [...order, ...fresh] : order;
 }
 
 // Order: prefs.order ranks first (ties/unranked keep catalog order), then
@@ -495,7 +514,7 @@ const LS_KEY = 'devin-model-picker:v1';
 const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, baseLabel,
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
   underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
-  validDraft, pickFusionSlots, hidesCard, sanitizePrefs, arrangeCards, applyCardDrop, dropModeFromRatio,
+  validDraft, pickFusionSlots, hidesCard, sanitizePrefs, prefSets, appendNewKeys, arrangeCards, applyCardDrop, dropModeFromRatio,
   moveCardKey, toggleKey, mergeSubsetOrder,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
 if (typeof module === 'object' && module.exports) { module.exports = exportsMap; return; }
@@ -735,18 +754,26 @@ function saveDraft() {
   } catch {}
 }
 
-// Card preferences (order/favorites/hidden/aliases) live in the same LS object.
+// Card preferences (order/favorites/hidden/aliases) live in the same LS object
+// as three independent lists: single, fusion lead, fusion sidekick.
 function loadPrefs() {
-  try { return sanitizePrefs(JSON.parse(localStorage.getItem(LS_KEY) || '{}').prefs); } catch { return sanitizePrefs(null); }
+  try { return prefSets(JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch { return prefSets(null); }
 }
 function savePrefs() {
   try {
     const data = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-    data.prefs = panelState?.prefs || sanitizePrefs(null);
+    const sets = panelState?.prefSets || prefSets(null);
+    data.prefs = sets.single;
+    data.fusionPrefs = { lead: sets.lead, sidekick: sets.sidekick };
     localStorage.setItem(LS_KEY, JSON.stringify(data));
   } catch {}
 }
-function prefAlias(key) { return panelState?.prefs?.aliases?.[key] || null; }
+// The list the current mode edits: the active fusion slot's list in fusion
+// mode, the single list everywhere else.
+function activePrefs() {
+  return panelState?.prefSets?.[panelState.mode === 'fusion' ? panelState.activeSlot : 'single'];
+}
+function prefAlias(key) { return activePrefs()?.aliases?.[key] || null; }
 
 // Panel ----------------------------------------------------------------------
 let styleNode = null;
@@ -856,14 +883,14 @@ function closeMenu() {
 
 function commitRename(key, value) {
   const alias = (value || '').trim().slice(0, 40);
-  if (alias) panelState.prefs.aliases[key] = alias; else delete panelState.prefs.aliases[key];
+  if (alias) activePrefs().aliases[key] = alias; else delete activePrefs().aliases[key];
   panelState.editing = null;
   savePrefs();
   rerenderGrid();
 }
 
 function cardMenuItems(card, resolveUid) {
-  const prefs = panelState.prefs;
+  const prefs = activePrefs();
   const key = card.prefKey;
   const items = [
     { label: card.favorite ? '取消收藏' : '收藏', action: () => {
@@ -932,7 +959,7 @@ function wireCardChrome(node, card, index, resolveUid) {
     const keys = (panelState.visibleCards || []).map(item => item.prefKey);
     const toIndex = keys.indexOf(card.prefKey);
     if (toIndex < 0) return;
-    panelState.prefs.order = mergeSubsetOrder(panelState.fullKeys || keys,
+    activePrefs().order = mergeSubsetOrder(panelState.fullKeys || keys,
       applyCardDrop(keys, panelState.dragIndex, toIndex, mode));
     savePrefs();
     rerenderGrid();
@@ -1012,7 +1039,7 @@ const fmtLabel = format => FMT_LABEL[format] || format || '';
 
 function devinCards() {
   const models = panelState?.located?.host?.visibleModelConfigs || [];
-  const hidden = new Set(panelState?.prefs?.hidden || []);
+  const hidden = new Set(panelState?.prefSets?.single?.hidden || []);
   const cards = groupCards(models, lastState)
     .map(card => ({ ...card, families: card.families.filter(family => !family.byok) }))
     .filter(card => card.families.length);
@@ -1308,16 +1335,17 @@ function renderDevinDetail(box, devins) {
   renderModelList(box, items, {
     toggle(item) {
       item.on = !item.on;
-      panelState.prefs.hidden = item.on
-        ? panelState.prefs.hidden.filter(key => key !== item.key)
-        : [...new Set([...panelState.prefs.hidden, item.key])];
+      const hidden = panelState.prefSets.single.hidden;
+      panelState.prefSets.single.hidden = item.on
+        ? hidden.filter(key => key !== item.key)
+        : [...new Set([...hidden, item.key])];
       savePrefs();
       renderProviders();
     },
     bulk(keys, show) {
-      const set = new Set(panelState.prefs.hidden);
+      const set = new Set(panelState.prefSets.single.hidden);
       for (const key of keys) { if (show) set.delete(key); else set.add(key); }
-      panelState.prefs.hidden = [...set];
+      panelState.prefSets.single.hidden = [...set];
       savePrefs();
       renderProviders();
     },
@@ -1576,16 +1604,33 @@ function rerenderGrid() {
   while (grid.firstChild) grid.removeChild(grid.firstChild);
   const { located, mode } = panelState;
   const models = located.host.visibleModelConfigs || [];
+  // Every newly added model goes to the end of all three lists.
+  const sets = panelState.prefSets;
+  const syncOrder = (set, cards) => {
+    const next = appendNewKeys(set.order, cards.map(card => card.prefKey));
+    if (next === set.order) return false;
+    set.order = next;
+    return true;
+  };
+  const singleCards = groupCards(models, lastState);
+  let changed = syncOrder(sets.single, singleCards);
+  let fusionCards = null;
+  if (lastState) {
+    const nativeIndex = new Map(models.map(model => [model.modelUid, model]));
+    fusionCards = { lead: groupFusion(lastState.fusionCandidates?.leads || [], nativeIndex),
+      sidekick: groupFusion(lastState.fusionCandidates?.sidekicks || [], nativeIndex) };
+    if (syncOrder(sets.lead, fusionCards.lead)) changed = true;
+    if (syncOrder(sets.sidekick, fusionCards.sidekick)) changed = true;
+  }
+  if (changed) savePrefs();
   if (mode === 'fusion') {
     const slotRowEl = panel.querySelector('.dmp-slots');
     if (slotRowEl) slotRowEl.replaceChildren(slotChip('lead', '主模型'), slotChip('sidekick', '辅助模型'));
     const oldApply = panel.querySelector('.dmp-apply'); if (oldApply) oldApply.remove();
     const oldErr = panel.querySelector('.dmp-err'); if (oldErr) oldErr.remove();
     if (!lastState) { grid.appendChild(el('div', 'dmp-empty', '本地服务未就绪')); renderFoot(); return; }
-    const nativeIndex = new Map(models.map(model => [model.modelUid, model]));
-    const active = panelState.activeSlot === 'lead' ? 'leads' : 'sidekicks';
-    const cards = groupFusion(lastState.fusionCandidates?.[active] || [], nativeIndex);
-    const all = arrangeCards(cards, panelState.prefs, true);
+    const cards = panelState.activeSlot === 'lead' ? fusionCards.lead : fusionCards.sidekick;
+    const all = arrangeCards(cards, activePrefs(), true);
     panelState.fullKeys = all.map(card => card.prefKey);
     const arranged = all.filter(card => !card.hidden);
     const rendered = [];
@@ -1604,12 +1649,12 @@ function rerenderGrid() {
   }
   const oldApply = panel.querySelector('.dmp-apply'); if (oldApply) oldApply.remove();
   const oldErr = panel.querySelector('.dmp-err'); if (oldErr) oldErr.remove();
-  const cards = groupCards(models, lastState);
+  const cards = singleCards;
   // Merged hide semantics: a card is hidden only when its key is in prefs.hidden
   // AND no enabled BYOK family keeps it alive; the provider chip then offers
   // only the visible families.
-  const hiddenSet = new Set(panelState.prefs.hidden);
-  const all = arrangeCards(cards, panelState.prefs, true);
+  const hiddenSet = new Set(activePrefs().hidden);
+  const all = arrangeCards(cards, activePrefs(), true);
   panelState.fullKeys = all.map(card => card.prefKey);
   const arranged = all.filter(card => !card.hidden);
   const rendered = [];
@@ -1713,7 +1758,7 @@ function openPanel(trigger, located) {
   panelState = { trigger, located, mode: startsFusion ? 'fusion' : 'single', filter: '',
     value, activeSlot: 'lead', cardStates: new Map(),
     fusionSlots: { lead: null, sidekick: null },
-    prefs: loadPrefs(), menu: null, editing: null,
+    prefSets: loadPrefs(), menu: null, editing: null,
     dragIndex: null, suppressClick: false, status: '',
     providers: [], provSel: 'devin', provSearch: '', provOnlyShown: false,
     provEdit: null, provConfirmDelete: false, provError: '' };

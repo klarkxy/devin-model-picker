@@ -76,10 +76,12 @@ test('/picker/fusion alternates slots, validates refs and rejects same_model', a
   const sidekick = sidekicks.find(c => c.familyKey === 'byok:p:m2').ref;
   const first = await (await post({ lead, sidekick })).json();
   assert.equal(first.uid, 'fusion-dmp-a');
-  const second = await (await post({ lead, sidekick, currentUid: first.uid })).json();
+  const lead2 = leads.find(c => c.familyKey === 'byok:p:m2').ref;
+  const sidekick2 = sidekicks.find(c => c.familyKey === 'byok:p:m1' && c.ref.uid !== lead.uid).ref;
+  const second = await (await post({ lead: lead2, sidekick: sidekick2, currentUid: first.uid })).json();
   assert.equal(second.uid, 'fusion-dmp-b', 'alternates to force a real picker change');
   const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8'));
-  assert.deepEqual(saved.fusionSlots.b.lead, lead);
+  assert.deepEqual(saved.fusionSlots.b.lead, lead2);
   const bad = await post({ lead: { kind: 'byok', uid: 'dmp-nope' }, sidekick });
   assert.equal(bad.status, 400);
   assert.deepEqual(await bad.json(), { error: 'invalid_ref' });
@@ -89,6 +91,23 @@ test('/picker/fusion alternates slots, validates refs and rejects same_model', a
     assert.equal(res.status, 400, JSON.stringify(pair));
     assert.deepEqual(await res.json(), { error: 'same_model' });
   }
+});
+
+test('/picker/fusion reuses the slot already holding the pair without writing', async t => {
+  const f = await fixture(t, { providers: providers() });
+  const post = body => fetch(f.base + '/picker/fusion', { method: 'POST',
+    headers: { origin: ORIGIN, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const state = await (await fetch(f.base + '/picker/state', { headers: { origin: ORIGIN } })).json();
+  const lead = state.fusionCandidates.leads.find(c => c.familyKey === 'byok:p:m1').ref;
+  const sidekick = state.fusionCandidates.sidekicks.find(c => c.familyKey === 'byok:p:m2').ref;
+  const first = await (await post({ lead, sidekick })).json();
+  assert.equal(first.uid, 'fusion-dmp-a');
+  // Posting the exact pair slot a holds returns its uid — even when the
+  // current value is the other slot — and leaves config.json untouched.
+  const again = await (await post({ lead, sidekick, currentUid: 'fusion-dmp-b' })).json();
+  assert.equal(again.uid, 'fusion-dmp-a');
+  const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8'));
+  assert.deepEqual(saved.fusionSlots, { a: { lead, sidekick } }, 'slot b was never written');
 });
 
 test('native+native selection returns the official fusion uid shortcut', async t => {

@@ -31,3 +31,9 @@ npm run package   # node scripts/package.cjs → devin-model-picker-<version>.vs
 ## Releasing a VSIX for testing
 
 Bump `version` in package.json before every VSIX handed to the user: reinstalling the same version does not overwrite the installed extension files.
+
+## Debugging notes
+
+- The CLI's live ACP config options (incl. the `model` select list) are persisted per session in `%APPDATA%/devin/User/acp-messages/<uuid>.db` (`meta` key `info`); the uuid is in `state.vscdb` key `windsurf.acp.messageStore.session.acp/devin-cli/<session>`. A uid missing from that list makes the renderer silently fall back to the default model.
+- The CLI drops router entries whose `modelInfo.harnessUids` is only `['fusion']`; fusion slot entries must carry `['fusion', <lead harness...>]`.
+- CLI logs: `%APPDATA%/devin/cli/logs`; backend log: `<globalStorage>/klarkxy.devin-model-picker/runtime.log` (an `assignment` event means our AssignModel resolved a fusion slot).

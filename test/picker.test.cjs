@@ -264,6 +264,33 @@ test('sanitizePrefs normalizes arrays, dedupes, and caps aliases at 40 chars', (
   assert.deepEqual(picker.sanitizePrefs('junk'), { order: [], favorites: [], hidden: [], aliases: {} });
 });
 
+test('prefSets migrates legacy flat prefs into three independent lists', () => {
+  const data = { prefs: { order: ['a', 'b'], favorites: ['a'], hidden: ['h'], aliases: { a: 'A' } } };
+  const sets = picker.prefSets(data);
+  assert.deepEqual(sets.single, { order: ['a', 'b'], favorites: ['a'], hidden: ['h'], aliases: { a: 'A' } });
+  assert.deepEqual(sets.lead, { order: ['a', 'b'], favorites: ['a'], hidden: [], aliases: { a: 'A' } },
+    'fusion lists seed from single minus hidden');
+  assert.deepEqual(sets.sidekick, sets.lead);
+  sets.lead.order.push('x'); sets.lead.aliases.b = 'B'; sets.lead.favorites.push('z');
+  assert.deepEqual(sets.single.order, ['a', 'b'], 'fusion lists share no arrays with single');
+  assert.deepEqual(sets.single.aliases, { a: 'A' });
+  assert.deepEqual(sets.sidekick.order, ['a', 'b'], 'the two fusion lists share no arrays either');
+  // Stored fusionPrefs win over the seed and keep their own hidden keys.
+  const stored = picker.prefSets({ prefs: { order: ['s'] },
+    fusionPrefs: { lead: { order: ['l'], hidden: ['lh'] }, sidekick: { favorites: ['f'] } } });
+  assert.deepEqual(stored.lead.order, ['l']);
+  assert.deepEqual(stored.lead.hidden, ['lh']);
+  assert.deepEqual(stored.sidekick.favorites, ['f']);
+  assert.deepEqual(picker.prefSets(null).single, { order: [], favorites: [], hidden: [], aliases: {} });
+});
+
+test('appendNewKeys appends unseen keys in order and returns the same array otherwise', () => {
+  const order = ['a', 'b'];
+  assert.deepEqual(picker.appendNewKeys(order, ['b', 'c', 'd']), ['a', 'b', 'c', 'd']);
+  assert.equal(picker.appendNewKeys(order, ['b', 'a']), order, 'nothing new → same reference');
+  assert.equal(picker.appendNewKeys(order, []), order);
+});
+
 test('arrangeCards: order ranks first, unknowns keep catalog order, favorites front, hidden out', () => {
   const mk = prefKey => ({ prefKey });
   const cards = [mk('a'), mk('b'), mk('c'), mk('d'), mk('e')];

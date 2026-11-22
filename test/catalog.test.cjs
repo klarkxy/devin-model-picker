@@ -35,6 +35,7 @@ test('fusion-dmp-a and fusion-dmp-b are always emitted even with no slots', () =
   const a = catalog.models.find(model => model.uid === 'fusion-dmp-a');
   assert.equal(a.label, 'BYOK Fusion');
   assert.equal(a.json.modelInfo.isModelRouter, true);
+  assert.deepEqual(a.json.modelInfo.harnessUids, ['fusion', 'swe-1p6', 'swe-1p5']);
   assert.deepEqual(a.json.modelFamilyMetadata.entries, []);
 });
 
@@ -47,10 +48,21 @@ test('a BYOK lead + native sidekick slot resolves via both assignment shapes', (
   assert.ok(catalog.fusions['fusion-dmp-a']);
   assert.equal(catalog.fusions['fusion-dmp-a'].sidekickNative, true);
   assert.deepEqual(catalog.fusions['fusion-dmp-a'].sidekickHarnessUids, ['swe-1p6']);
-  // lead assignment (modelRouterUid → harness 'fusion')
+  // The renderer entry names the pair and carries the lead's harness list;
+  // the CLI entry keeps the stable group label so its signature never moves.
+  const renderer = catalog.models.find(model => model.uid === 'fusion-dmp-a');
+  assert.equal(renderer.label, 'M1 + Side N');
+  assert.equal(renderer.json.modelFamilyMetadata.modelFamilyLabel, 'M1 + Side N');
+  assert.deepEqual(renderer.json.modelInfo.harnessUids, ['fusion', 'swe-1p6', 'swe-1p5']);
+  const cli = catalog.cliModels.find(model => model.uid === 'fusion-dmp-a');
+  assert.equal(cli.label, 'BYOK Fusion');
+  assert.equal(cli.json.modelFamilyMetadata.modelFamilyLabel, 'BYOK Fusion');
+  assert.deepEqual(cli.json.modelInfo.harnessUids, ['fusion', 'swe-1p6', 'swe-1p5']);
+  assert.equal(catalog.fusions['fusion-dmp-a'].label, 'M1 + Side N');
+  // lead assignment (modelRouterUid → 'fusion' + sidekick harnesses)
   const leadHit = resolveAssignment({ modelRouterUid: 'fusion-dmp-a' }, { json: true }, catalog);
   assert.equal(leadHit.assignment.modelUid, lead);
-  assert.deepEqual(leadHit.assignment.harnessUids, ['fusion']);
+  assert.deepEqual(leadHit.assignment.harnessUids, ['fusion', 'swe-1p6', 'swe-1p5']);
   // sidekick assignment (fusionLeadRouterUid → native sidekick harnesses)
   const sideHit = resolveAssignment({ modelRouterUid: 'fusion-dmp-a', fusionLeadRouterUid: 'fusion-dmp-a' }, { json: true }, catalog);
   assert.equal(sideHit.assignment.modelUid, 'side-n');
@@ -67,6 +79,10 @@ test('a native lead + BYOK sidekick slot resolves with observed lead harnesses',
   assert.ok(fusion);
   assert.equal(fusion.leadNative, true);
   assert.deepEqual(fusion.leadHarnessUids, ['fusion'], 'native lead runs through the official fusion harness');
+  const renderer = catalog.models.find(model => model.uid === 'fusion-dmp-b');
+  assert.equal(renderer.label, 'Lead N + M1', 'native lead label + BYOK sidekick shortLabel');
+  assert.deepEqual(renderer.json.modelInfo.harnessUids, ['fusion'], 'official lead harness forwarded');
+  assert.equal(catalog.cliModels.find(model => model.uid === 'fusion-dmp-b').label, 'BYOK Fusion');
   const leadHit = resolveAssignment({ modelRouterUid: 'fusion-dmp-b' }, { json: true }, catalog);
   assert.equal(leadHit.assignment.modelUid, 'lead-n');
   assert.deepEqual(leadHit.assignment.harnessUids, ['fusion']);
@@ -209,6 +225,11 @@ test('a dmp slot with non-official native pair resolves through derived harnesse
   assert.deepEqual(fusion.leadHarnessUids, ['fusion', 'wl-harness']);
   assert.equal(fusion.sidekickNative, true);
   assert.deepEqual(fusion.sidekickHarnessUids, ['ws-harness']);
+  const renderer = catalog.models.find(model => model.uid === 'fusion-dmp-a');
+  assert.equal(renderer.label, 'Wild Lead + Wild Side');
+  assert.deepEqual(renderer.json.modelInfo.harnessUids, ['fusion', 'wl-harness'],
+    'renderer entry carries the observed lead harness after fusion');
+  assert.equal(catalog.cliModels.find(model => model.uid === 'fusion-dmp-a').label, 'BYOK Fusion');
   const leadHit = resolveAssignment({ modelRouterUid: 'fusion-dmp-a' }, { json: true }, catalog);
   assert.equal(leadHit.assignment.modelUid, 'wild-lead');
   assert.deepEqual(leadHit.assignment.harnessUids, ['fusion', 'wl-harness']);

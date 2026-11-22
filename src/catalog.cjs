@@ -45,7 +45,7 @@ function encodeConfig(config) {
     s(22, config.modelUid), m(23, infoRaw), m(30, encodeFamily(config.modelFamilyMetadata))]);
 }
 
-function configFor({ uid, label, family, familyUid, contextWindow, maxOutputTokens, effort, fusion, supportsImages, inferenceServerUrl }) {
+function configFor({ uid, label, family, familyUid, contextWindow, maxOutputTokens, effort, fusion, supportsImages, inferenceServerUrl, harnessUids }) {
   const json = {
     label, modelUid: uid, provider: fusion ? 1 : 2,
     maxTokens: contextWindow, supportsImages: !!supportsImages,
@@ -53,7 +53,7 @@ function configFor({ uid, label, family, familyUid, contextWindow, maxOutputToke
       modelUid: uid, modelType: 2, maxTokens: contextWindow,
       maxOutputTokens,
       inferenceServerUrl,
-      harnessUids: fusion ? ['fusion'] : [...SIDEKICK_HARNESSES],
+      harnessUids: harnessUids || (fusion ? ['fusion'] : [...SIDEKICK_HARNESSES]),
       displayOption: fusion ? 3 : 0, modelFamilyUid: familyUid, isModelRouter: !!fusion,
       modelFeatures: { zeroShotCapable: true, supportsImages: !!supportsImages, supportsToolCalls: true,
         supportsParallelToolCalls: true, supportsThinking: !!effort && effort !== 'none' },
@@ -252,13 +252,14 @@ function resolveSlotRef(ref, role, routes, roles) {
   if (!ref || typeof ref !== 'object' || Array.isArray(ref) || typeof ref.uid !== 'string') return null;
   if (ref.kind === 'byok') {
     const route = routes[ref.uid];
-    return route ? { uid: route.uid, native: false, contextWindow: route.contextWindow, maxOutputTokens: route.maxOutputTokens, supportsImages: route.supportsImages } : null;
+    return route ? { uid: route.uid, native: false, label: route.shortLabel,
+      contextWindow: route.contextWindow, maxOutputTokens: route.maxOutputTokens, supportsImages: route.supportsImages } : null;
   }
   if (ref.kind === 'native') {
     const eligible = role === 'lead' ? roles.eligibleNativeLeads : roles.eligibleNativeSidekicks;
     const native = eligible.get(ref.uid);
     if (!native) return null;
-    return { uid: ref.uid, native: true,
+    return { uid: ref.uid, native: true, label: native.label,
       harnessUids: role === 'lead' ? native.leadHarnessUids : native.harnessUids,
       contextWindow: positive(native.maxTokens, 272000),
       maxOutputTokens: Math.min(positive(native.maxOutputTokens, 16384), positive(native.maxTokens, 272000)),
@@ -294,6 +295,7 @@ function buildCatalog(config = {}, nativeModels = []) {
       const enabled = model.enabled !== false;
       const prefix = provider.name || provider.id, sourceLabel = model.label || model.id;
       const familyLabel = sourceLabel.startsWith(prefix + ' · ') ? sourceLabel : `${prefix} · ${sourceLabel}`;
+      const shortSource = sourceLabel.startsWith(prefix + ' · ') ? sourceLabel.slice(prefix.length + 3) : sourceLabel;
       const efforts = modelEfforts(model);
       for (const effort of efforts) {
         if (effort !== null && (typeof effort !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(effort))) throw new Error('Invalid effort value');
@@ -304,7 +306,8 @@ function buildCatalog(config = {}, nativeModels = []) {
           contextWindow, maxOutputTokens, supportsImages: modelSupportsImages(model), inferenceServerUrl };
         leads.push(lead);
         routes[uid] = { uid, providerId: provider.id, model: model.id, effort, enabled, contextWindow, maxOutputTokens,
-          supportsImages: lead.supportsImages, label: familyLabel + (effort ? ` ${effortMetadata(effort).name}` : '') };
+          supportsImages: lead.supportsImages, label: familyLabel + (effort ? ` ${effortMetadata(effort).name}` : ''),
+          shortLabel: shortSource + (effort ? ` ${effortMetadata(effort).name}` : '') };
       }
     }
   }
@@ -329,7 +332,10 @@ function buildCatalog(config = {}, nativeModels = []) {
 
   // Two stable Fusion entries the renderer card picker alternates between.
   // Slot refs that cannot resolve are omitted from `fusions`; AssignModel for
-  // such a uid is then forwarded upstream unchanged.
+  // such a uid is then forwarded upstream unchanged. The renderer entry shows
+  // the resolved pair and carries its lead harness (the CLI drops router
+  // entries whose modelInfo.harnessUids is just ['fusion']); the CLI entry
+  // keeps the FUSION_GROUP label so the picker-refresh signature is stable.
   const slots = config.fusionSlots && typeof config.fusionSlots === 'object' ? config.fusionSlots : {};
   for (const slot of ['a', 'b']) {
     const uid = 'fusion-dmp-' + slot;
@@ -338,13 +344,17 @@ function buildCatalog(config = {}, nativeModels = []) {
     const sidekick = configured ? resolveSlotRef(configured.sidekick, 'sidekick', routes, roles) : null;
     const contextWindow = lead?.contextWindow ?? 272000;
     const maxOutputTokens = Math.min(lead?.maxOutputTokens ?? 131072, contextWindow);
-    const fusionConfig = configFor({ uid, label: FUSION_GROUP,
-      familyUid: 'dmp-fusion-family', family: { modelFamilyLabel: FUSION_GROUP, entries: [] },
-      contextWindow, maxOutputTokens, supportsImages: lead?.supportsImages !== false, fusion: true, inferenceServerUrl });
-    models.unshift(fusionConfig);
-    cliModels.unshift(fusionConfig);
+    const leadHarness = lead?.native
+      ? ['fusion', ...lead.harnessUids.filter(harness => harness !== 'fusion')]
+      : ['fusion', ...SIDEKICK_HARNESSES];
+    const label = lead && sidekick ? `${lead.label} + ${sidekick.label}` : FUSION_GROUP;
+    const slotBase = { uid, familyUid: 'dmp-fusion-family', contextWindow, maxOutputTokens,
+      supportsImages: lead?.supportsImages !== false, fusion: true, harnessUids: leadHarness, inferenceServerUrl };
+    models.unshift(configFor({ ...slotBase, label, family: { modelFamilyLabel: label, entries: [] } }));
+    cliModels.unshift(configFor({ ...slotBase, label: FUSION_GROUP,
+      family: { modelFamilyLabel: FUSION_GROUP, entries: [] } }));
     if (lead && sidekick) {
-      fusions[uid] = { uid, label: FUSION_GROUP, leadUid: lead.uid, sidekickUid: sidekick.uid,
+      fusions[uid] = { uid, label, leadUid: lead.uid, sidekickUid: sidekick.uid,
         leadNative: lead.native, sidekickNative: sidekick.native,
         ...(lead.native ? { leadHarnessUids: lead.harnessUids } : {}),
         ...(sidekick.native ? { sidekickHarnessUids: sidekick.harnessUids } : {}) };
@@ -828,7 +838,7 @@ function resolveAssignment(data, format = {}, catalog) {
     if (leadRouter) {
       harnessUids = fusion.sidekickNative ? fusion.sidekickHarnessUids : [...SIDEKICK_HARNESSES];
     } else {
-      harnessUids = fusion.leadNative ? fusion.leadHarnessUids : ['fusion'];
+      harnessUids = fusion.leadNative ? fusion.leadHarnessUids : ['fusion', ...SIDEKICK_HARNESSES];
     }
     return format.json === true ? { assignment: { modelUid, harnessUids } }
       : m(1, concat([s(2, modelUid), ...harnessUids.map(harness => s(3, harness))]));
