@@ -38,4 +38,4 @@ Bump `version` in package.json before every VSIX handed to the user: reinstallin
 - The CLI drops router entries whose `modelInfo.harnessUids` is only `['fusion']`; fusion slot entries must carry `['fusion', <lead harness...>]`.
 - CLI logs: `%APPDATA%/devin/cli/logs`; backend log: `<globalStorage>/klarkxy.devin-model-picker/runtime.log` (an `assignment` event means our AssignModel resolved a fusion slot).
 
-Releases are automated by `.github/workflows/release.yml`: every push/PR runs tests and uploads the VSIX as an artifact; pushing an annotated tag `v<package.json version>` publishes a GitHub release with the VSIX attached and the tag message as release notes.
+Releases are automated by `.github/workflows/release.yml`: every push/PR runs tests and uploads the VSIX as an artifact; pushing an annotated tag `v<package.json version>` (create it with `git tag -a --cleanup=verbatim -F notes.md` so Markdown `#` headings survive) publishes a GitHub release with the VSIX attached and the tag message as release notes.
