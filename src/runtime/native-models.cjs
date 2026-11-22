@@ -9,7 +9,7 @@ async function readNativeModels({ root, port = PORT, signal, request = fetch }) 
   const send = async (url, headers) => {
     try { return await request(url, { signal: timeout, headers, redirect: 'error' }); }
     catch (error) {
-      if (timeout.aborted || !/ECONNRESET|socket hang up|other side closed/i.test(String(error?.cause?.code || error?.cause?.message || error?.message))) throw error;
+      if (timeout.aborted || !/ECONNRESET|UND_ERR_SOCKET|socket hang up|other side closed/i.test([error?.cause?.code, error?.cause?.message, error?.message].join(' '))) throw error;
       return request(url, { signal: timeout, headers, redirect: 'error' });
     }
   };
