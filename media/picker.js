@@ -267,7 +267,7 @@ function groupCards(models, state) {
     const card = cards.get(key);
     if (!card.families.has(familyUid)) {
       card.families.set(familyUid, { providerName, vendor: vendorOf(model, byokEntry), variants: [], familyLabel: '',
-        providerId: byokEntry?.providerId || null, modelId: byokEntry?.modelId || null });
+        byok: uid.startsWith('dmp-'), providerId: byokEntry?.providerId || null, modelId: byokEntry?.modelId || null });
     }
     const family = card.families.get(familyUid);
     if (providerName && !family.providerName) family.providerName = providerName;
@@ -325,7 +325,7 @@ function groupFusion(candidates, nativeIndex) {
     const parsed = cardName(nativeEntry?.familyLabel || candidate.familyLabel || candidate.label);
     const key = (ref.kind === 'byok' ? 'b:' : 'n:') + familyKey;
     if (!cards.has(key)) cards.set(key, { ...parsed, cardKey: key, prefKey: cardKey(parsed), providerName: candidate.providerName,
-      vendor: ref.kind === 'byok' ? 'other' : 'windsurf', variants: [], familyLabel: '',
+      vendor: ref.kind === 'byok' ? 'other' : 'windsurf', variants: [], familyLabel: '', byok: ref.kind === 'byok',
       providerId: ref.kind === 'byok' ? (candidate.familyKey || '').split(':')[1] || null : null,
       modelId: ref.kind === 'byok' ? (candidate.familyKey || '').split(':')[2] || null : null });
     const card = cards.get(key);
@@ -401,6 +401,15 @@ function sanitizePrefs(raw) {
 }
 
 // Order: prefs.order ranks first (ties/unranked keep catalog order), then
+// prefs.hidden only ever hides Devin's own models: a card is hidden when its
+// key is listed and nothing BYOK keeps it alive (BYOK visibility is the
+// provider's per-model switch, already applied to the data).
+function hidesCard(card, hidden) {
+  if (!hidden.has(card.prefKey)) return false;
+  if (Array.isArray(card.families)) return !card.families.some(family => family.byok);
+  return !card.byok;
+}
+
 // favorites stable-partitioned to the front, hidden removed unless shown.
 // Mutates cards: .favorite, .hidden.
 function arrangeCards(cards, prefs, showHidden) {
@@ -416,7 +425,7 @@ function arrangeCards(cards, prefs, showHidden) {
   const hidden = new Set(prefs?.hidden || []);
   for (const card of sorted) {
     card.favorite = favorites.has(card.prefKey);
-    card.hidden = hidden.has(card.prefKey);
+    card.hidden = hidesCard(card, hidden);
   }
   sorted.sort((a, b) => Number(b.favorite) - Number(a.favorite));
   return sorted.filter(card => showHidden || !card.hidden);
@@ -486,7 +495,7 @@ const LS_KEY = 'devin-model-picker:v1';
 const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, baseLabel,
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
   underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
-  validDraft, pickFusionSlots, sanitizePrefs, arrangeCards, applyCardDrop, dropModeFromRatio,
+  validDraft, pickFusionSlots, hidesCard, sanitizePrefs, arrangeCards, applyCardDrop, dropModeFromRatio,
   moveCardKey, toggleKey, mergeSubsetOrder,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
 if (typeof module === 'object' && module.exports) { module.exports = exportsMap; return; }
@@ -876,10 +885,16 @@ function cardMenuItems(card, resolveUid) {
   if (uid) items.push({ label: '复制模型 ID', action: () => {
     try { navigator.clipboard?.writeText(uid)?.catch?.(() => {}); } catch {} } });
   items.push({ label: card.hidden ? '取消隐藏' : '隐藏', action: () => {
-    const hiding = !prefs.hidden.includes(key);
-    prefs.hidden = hiding ? [...prefs.hidden, key] : prefs.hidden.filter(entry => entry !== key);
+    // The key hides only this card's Devin family; BYOK families are hidden by
+    // switching their models off, so a same-named model elsewhere is untouched.
+    const hiding = !card.hidden;
+    const hasNative = Array.isArray(card.families) ? card.families.some(family => !family.byok) : !card.byok;
+    const byokFams = Array.isArray(card.families)
+      ? card.families.filter(family => family.byok && family.providerId)
+      : (card.byok && card.providerId ? [card] : []);
+    if (!hiding) prefs.hidden = prefs.hidden.filter(entry => entry !== key);
+    else if (hasNative && !prefs.hidden.includes(key)) prefs.hidden = [...prefs.hidden, key];
     savePrefs(); rerenderGrid();
-    const byokFams = (card.families || []).filter(family => family.providerId);
     if (hiding && byokFams.length) {
       for (const family of byokFams) {
         pickerPost('/picker/models/enabled', { providerId: family.providerId,
@@ -1024,7 +1039,7 @@ function devinCards() {
   const models = panelState?.located?.host?.visibleModelConfigs || [];
   const hidden = new Set(panelState?.prefs?.hidden || []);
   const cards = groupCards(models, lastState)
-    .map(card => ({ ...card, families: card.families.filter(family => !family.providerId) }))
+    .map(card => ({ ...card, families: card.families.filter(family => !family.byok) }))
     .filter(card => card.families.length);
   return { cards, hidden };
 }
@@ -1589,8 +1604,10 @@ function rerenderGrid() {
     const nativeIndex = new Map(models.map(model => [model.modelUid, model]));
     const active = panelState.activeSlot === 'lead' ? 'leads' : 'sidekicks';
     const cards = groupFusion(lastState.fusionCandidates?.[active] || [], nativeIndex);
-    panelState.fullKeys = arrangeCards(cards, panelState.prefs, true).map(card => card.prefKey);
-    const arranged = arrangeCards(cards, panelState.prefs, panelState.showHidden);
+    const all = arrangeCards(cards, panelState.prefs, true);
+    panelState.fullKeys = all.map(card => card.prefKey);
+    panelState.hiddenCount = all.filter(card => card.hidden).length;
+    const arranged = panelState.showHidden ? all : all.filter(card => !card.hidden);
     const rendered = [];
     let shown = 0;
     arranged.forEach(card => {
@@ -1612,13 +1629,10 @@ function rerenderGrid() {
   // AND no enabled BYOK family keeps it alive; the provider chip then offers
   // only the visible families.
   const hiddenSet = new Set(panelState.prefs.hidden);
-  const effective = cards
-    .filter(card => hiddenSet.has(card.prefKey) && !card.families.some(family => family.providerId))
-    .map(card => card.prefKey);
-  const arrPrefs = effective.length === panelState.prefs.hidden.length ? panelState.prefs
-    : { ...panelState.prefs, hidden: effective };
-  panelState.fullKeys = arrangeCards(cards, arrPrefs, true).map(card => card.prefKey);
-  const arranged = arrangeCards(cards, arrPrefs, panelState.showHidden);
+  const all = arrangeCards(cards, panelState.prefs, true);
+  panelState.fullKeys = all.map(card => card.prefKey);
+  panelState.hiddenCount = all.filter(card => card.hidden).length;
+  const arranged = panelState.showHidden ? all : all.filter(card => !card.hidden);
   const rendered = [];
   let shown = 0;
   arranged.forEach(card => {
@@ -1627,7 +1641,7 @@ function rerenderGrid() {
     if (!filterMatch(panelState.filter, hay)) return;
     rendered.push(card);
     const render = card.hidden ? card
-      : { ...card, families: card.families.filter(family => family.providerId || !hiddenSet.has(card.prefKey)) };
+      : { ...card, families: card.families.filter(family => family.byok || !hiddenSet.has(card.prefKey)) };
     grid.appendChild(buildCard(render, shown++, located));
   });
   panelState.visibleCards = rendered;
@@ -1641,8 +1655,7 @@ function renderFoot() {
   const foot = panel?.querySelector('.dmp-foot');
   if (!foot || !panelState) return;
   while (foot.firstChild) foot.removeChild(foot.firstChild);
-  const hiddenSet = new Set(panelState.prefs.hidden || []);
-  const hiddenCount = (panelState.fullKeys || []).filter(key => hiddenSet.has(key)).length;
+  const hiddenCount = panelState.hiddenCount || 0;
   if (hiddenCount > 0) {
     const btn = el('button', 'dmp-showhidden',
       (panelState.showHidden ? '收起已隐藏' : '显示已隐藏') + ' (' + hiddenCount + ')');

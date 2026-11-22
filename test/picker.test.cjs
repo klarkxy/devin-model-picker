@@ -329,3 +329,30 @@ test('fusion cards expose a canonical prefKey shared with single mode', () => {
   ], {});
   assert.equal(single[0].prefKey, fusion[0].prefKey, 'prefs apply across both modes');
 });
+
+test('hidden prefs only hide Devin families: a same-named BYOK model keeps the card alive', () => {
+  const hidden = new Set(['kimi|3.1|pro']);
+  const native = { prefKey: 'kimi|3.1|pro', families: [{ byok: false }] };
+  const mixed = { prefKey: 'kimi|3.1|pro', families: [{ byok: false }, { byok: true, providerId: 'magpie' }] };
+  const byokOnly = { prefKey: 'kimi|3.1|pro', families: [{ byok: true, providerId: 'magpie' }] };
+  assert.equal(picker.hidesCard(native, hidden), true);
+  assert.equal(picker.hidesCard(mixed, hidden), false);
+  assert.equal(picker.hidesCard(byokOnly, hidden), false);
+  // Fusion cards are per provider: only the native one hides.
+  assert.equal(picker.hidesCard({ prefKey: 'kimi|3.1|pro', byok: false }, hidden), true);
+  assert.equal(picker.hidesCard({ prefKey: 'kimi|3.1|pro', byok: true }, hidden), false);
+  const arranged = picker.arrangeCards([{ ...native, cardKey: 'n:kimi' }, { prefKey: 'kimi|3.1|pro', byok: true, cardKey: 'b:kimi' }],
+    { order: [], favorites: [], hidden: ['kimi|3.1|pro'], aliases: {} }, false);
+  assert.deepEqual(arranged.map(card => card.cardKey), ['b:kimi']);
+});
+
+test('single-mode families know they are BYOK from the uid even before /picker/state loads', () => {
+  const cards = picker.groupCards([
+    { modelUid: 'kimi-k3-1-pro-high', label: 'Kimi K3.1 Pro High', familyUid: 'kimi-k3-1-pro', familyLabel: 'Kimi K3.1 Pro',
+      familyMetadata: { Effort: { order: 1, name: 'High' } }, displayOption: 'standard-picker' },
+    { modelUid: 'dmp-magpie-kimi-k3-1-pro-0123456789abcdef', label: 'Magpie · Kimi K3.1 Pro', displayOption: 'standard-picker' },
+  ], null);
+  const families = cards.flatMap(card => card.families);
+  assert.ok(families.some(family => family.byok === true));
+  assert.ok(families.some(family => family.byok === false));
+});
