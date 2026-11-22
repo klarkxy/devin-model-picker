@@ -233,7 +233,10 @@ function groupCards(models, state) {
     if (HIDDEN_DISPLAY.has(model.displayOption)) continue;
     if (uid.startsWith('fusion-')) continue;
     if (model.familyMetadata && typeof model.familyMetadata === 'object' && model.familyMetadata.Lead) continue;
-    const byokEntry = uid.startsWith('dmp-') ? byok[uid] : undefined;
+    // UID prefix is the source of truth for BYOK, including the first render
+    // before /picker/state arrives (byok[uid] is empty then).
+    const isByok = uid.startsWith('dmp-');
+    const byokEntry = isByok ? byok[uid] : undefined;
     // BYOK families are per provider+model (one dropdown entry each); native
     // families use the server familyUid. Families then merge across providers
     // into one card via cardKey.
@@ -259,8 +262,9 @@ function groupCards(models, state) {
       free: model.modelCost?.type === 'free' || model.modelCost?.tier === 'free',
       supportsImages: model.supportsImages !== false,
       // Native variants keep their visibleModelConfigs entry — the host's
-      // getCostTag prices exactly that object. BYOK never carries it.
-      native: !byokEntry, model: byokEntry ? undefined : model,
+      // getCostTag prices exactly that object. BYOK never carries it, even
+      // when state.byok has not loaded yet.
+      native: !isByok, model: isByok ? undefined : model,
     };
     // BYOK labels carry the effort suffix ('… High'); the model id is the
     // stable name basis so every effort variant lands on the same card.
@@ -270,7 +274,7 @@ function groupCards(models, state) {
     const card = cards.get(key);
     if (!card.families.has(familyUid)) {
       card.families.set(familyUid, { providerName, vendor: vendorOf(model, byokEntry), variants: [], familyLabel: '',
-        byok: uid.startsWith('dmp-'), providerId: byokEntry?.providerId || null, modelId: byokEntry?.modelId || null });
+        byok: isByok, providerId: byokEntry?.providerId || null, modelId: byokEntry?.modelId || null });
     }
     const family = card.families.get(familyUid);
     if (providerName && !family.providerName) family.providerName = providerName;
@@ -518,6 +522,17 @@ function viewMode(data) {
   return data?.view === 'classic' ? 'classic' : 'cards';
 }
 
+// Panel capture-keydown skips fields (they type) and the classic view switch
+// (Enter/Space must activate the button, not pick the first card).
+function skipsPanelHotkeys(active) {
+  if (!active) return false;
+  if (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
+    || active.tagName === 'SELECT' || active.isContentEditable) return true;
+  if (active.classList?.contains?.('dmp-classic')) return true;
+  if (typeof active.closest === 'function' && active.closest('.dmp-classic')) return true;
+  return false;
+}
+
 // Devin's own billing tag: ask the picker host's getCostTag for the native
 // visibleModelConfigs entry — the same call the classic LocalModelPicker
 // makes. We never reimplement billing rules, guess multipliers, or scrape
@@ -546,7 +561,7 @@ const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, ba
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
   underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
   validDraft, pickFusionSlots, hidesCard, sanitizePrefs, prefSets, appendNewKeys, arrangeCards, applyCardDrop, dropModeFromRatio,
-  moveCardKey, toggleKey, mergeSubsetOrder, viewMode, costTagFor, selectedVariant,
+  moveCardKey, toggleKey, mergeSubsetOrder, viewMode, skipsPanelHotkeys, costTagFor, selectedVariant,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
 if (typeof module === 'object' && module.exports) { module.exports = exportsMap; return; }
 
@@ -1926,8 +1941,7 @@ function openPanel(trigger, located) {
     const active = document.activeElement;
     if (panelState.menu) return;
     if (panelState.mode === 'providers') return;
-    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
-      || active.tagName === 'SELECT' || active.isContentEditable)) return;
+    if (skipsPanelHotkeys(active)) return;
     if (event.key === 'Enter') {
       const first = panel.querySelector('.dmp-card:not(.dmp-off):not(.dmp-add)');
       if (first) first.click();

@@ -374,14 +374,30 @@ test('hidden prefs only hide Devin families: a same-named BYOK model keeps the c
 });
 
 test('single-mode families know they are BYOK from the uid even before /picker/state loads', () => {
-  const cards = picker.groupCards([
-    { modelUid: 'kimi-k3-1-pro-high', label: 'Kimi K3.1 Pro High', familyUid: 'kimi-k3-1-pro', familyLabel: 'Kimi K3.1 Pro',
-      familyMetadata: { Effort: { order: 1, name: 'High' } }, displayOption: 'standard-picker' },
-    { modelUid: 'dmp-magpie-kimi-k3-1-pro-0123456789abcdef', label: 'Magpie · Kimi K3.1 Pro', displayOption: 'standard-picker' },
-  ], null);
+  const nativeModel = { modelUid: 'kimi-k3-1-pro-high', label: 'Kimi K3.1 Pro High', familyUid: 'kimi-k3-1-pro', familyLabel: 'Kimi K3.1 Pro',
+    familyMetadata: { Effort: { order: 1, name: 'High' } }, displayOption: 'standard-picker' };
+  const byokModel = { modelUid: 'dmp-magpie-kimi-k3-1-pro-0123456789abcdef', label: 'Magpie · Kimi K3.1 Pro', displayOption: 'standard-picker' };
+  const cards = picker.groupCards([nativeModel, byokModel], null);
   const families = cards.flatMap(card => card.families);
-  assert.ok(families.some(family => family.byok === true));
-  assert.ok(families.some(family => family.byok === false));
+  const byokFamily = families.find(family => family.byok === true);
+  const nativeFamily = families.find(family => family.byok === false);
+  assert.ok(byokFamily);
+  assert.ok(nativeFamily);
+  const byokVariant = byokFamily.variants[0];
+  const nativeVariant = nativeFamily.variants[0];
+  assert.equal(byokVariant.native, false, 'dmp- uid is BYOK before state.byok exists');
+  assert.equal(byokVariant.model, undefined, 'BYOK never carries a native model for getCostTag');
+  assert.equal(nativeVariant.native, true);
+  assert.equal(nativeVariant.model, nativeModel);
+  const seen = [];
+  const located = { host: { getCostTag(model) {
+    seen.push(model?.modelUid);
+    return { label: String(model?.modelUid || '').startsWith('dmp-') ? 'API' : '1x' };
+  } } };
+  const tagFor = variant => variant?.native === true ? picker.costTagFor(located, variant.model) : null;
+  assert.equal(tagFor(byokVariant), null, 'first render must not show the native API tripwire on BYOK');
+  assert.deepEqual(tagFor(nativeVariant), { label: '1x', tooltip: undefined });
+  assert.deepEqual(seen, [nativeModel.modelUid], 'getCostTag is never called with a dmp- model');
 });
 
 test('viewMode defaults to cards, honors classic, tolerates garbage input', () => {
@@ -475,4 +491,35 @@ test('classic view is wired into the capture listeners and the switch affordance
   assert.ok(classicBody.includes('openChangeFor(trigger'), 'the public onOpenChange is the primary path');
   assert.ok(classicBody.indexOf('openChangeFor(trigger') < classicBody.indexOf('dispatchEvent'),
     'event replay is only the no-callback fallback');
+});
+
+test('Enter and Space on the classic switch skip first-card hotkeys', () => {
+  const switchBtn = { tagName: 'BUTTON', classList: { contains: name => name === 'dmp-classic' },
+    closest: sel => sel === '.dmp-classic' ? switchBtn : null };
+  const switchChild = { tagName: 'SPAN', classList: { contains: () => false },
+    closest: sel => sel === '.dmp-classic' ? switchBtn : null };
+  const card = { tagName: 'DIV', classList: { contains: () => false }, closest: () => null };
+  assert.equal(picker.skipsPanelHotkeys(switchBtn), true);
+  assert.equal(picker.skipsPanelHotkeys(switchChild), true);
+  assert.equal(picker.skipsPanelHotkeys(card), false);
+  assert.equal(picker.skipsPanelHotkeys({ tagName: 'INPUT' }), true);
+  assert.equal(picker.skipsPanelHotkeys({ tagName: 'TEXTAREA' }), true);
+  assert.equal(picker.skipsPanelHotkeys({ tagName: 'DIV', isContentEditable: true }), true);
+  assert.equal(picker.skipsPanelHotkeys(null), false);
+  const source = fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8');
+  const onKey = source.slice(source.indexOf('const onKey = event'), source.indexOf("document.addEventListener('keydown', onKey"));
+  assert.ok(onKey.includes('skipsPanelHotkeys'), 'panel key handler consults skipsPanelHotkeys');
+  assert.ok(onKey.indexOf('skipsPanelHotkeys') < onKey.indexOf("event.key === 'Enter'"),
+    'view switch is skipped before first-card Enter');
+  assert.ok(onKey.indexOf('skipsPanelHotkeys') < onKey.indexOf('event.key.length === 1'),
+    'view switch is skipped before Space/typeahead steals focus');
+  assert.ok(!onKey.includes('onModelSelect'), 'the key handler never selects a model itself');
+});
+
+test('verify-classic.py launches default Playwright Chromium with an env override', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../dev/verify-classic.py'), 'utf8');
+  assert.ok(source.includes("os.environ.get('DMP_CHROMIUM')"), 'DMP_CHROMIUM overrides the executable');
+  assert.ok(source.includes('pw.chromium.launch(**chromium_launch_kwargs())'),
+    'launch uses kwargs so a missing Windows path does not crash');
+  assert.ok(source.includes('return {}'), 'no override and no Windows cache → default Chromium');
 });

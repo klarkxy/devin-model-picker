@@ -3,6 +3,16 @@
 import json, sys, threading, http.server, functools, os, glob
 from playwright.sync_api import sync_playwright
 
+def chromium_launch_kwargs():
+    override = os.environ.get('DMP_CHROMIUM')
+    if override:
+        return {'executable_path': override}
+    cand = sorted(glob.glob(r'T:/Caches/Playwright/chromium_headless_shell-*/chrome-headless-shell-win64/chrome-headless-shell.exe')
+        + glob.glob(r'C:/Users/27837/AppData/Local/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-win64/chrome-headless-shell.exe'))
+    if cand:
+        return {'executable_path': cand[-1]}
+    return {}
+
 PORT = 8934
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 handler = functools.partial(http.server.SimpleHTTPRequestHandler)
@@ -19,9 +29,7 @@ def check(name, cond, extra=''):
     print(('PASS' if cond else 'FAIL'), name, extra)
 
 with sync_playwright() as pw:
-    cand = sorted(glob.glob(r'T:/Caches/Playwright/chromium_headless_shell-*/chrome-headless-shell-win64/chrome-headless-shell.exe')
-        + glob.glob(r'C:/Users/27837/AppData/Local/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-win64/chrome-headless-shell.exe'))
-    browser = pw.chromium.launch(executable_path=cand[-1])
+    browser = pw.chromium.launch(**chromium_launch_kwargs())
     ctx = browser.new_context(viewport={'width': 1000, 'height': 820})
     page = ctx.new_page()
     page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
@@ -93,6 +101,40 @@ with sync_playwright() as pw:
     opus = page.locator('.dmp-card', has_text='Opus').first
     check('BYOK family hides cost tag again', opus.locator('.dmp-cost').count() == 0)
     page.screenshot(path=SHOTS + '/native-cost.png', clip=page.locator(panel).bounding_box())
+
+    # --- Enter/Space on 经典选择器 must open classic without picking a card ---
+    select_log = lambda: page.evaluate("""() => {
+      const btn = document.querySelector('#composer button[aria-haspopup="menu"]');
+      return (btn.__dmpSelectLog || []).map(p => p.modelUid);
+    }""")
+    current_value = lambda: page.evaluate("""() => {
+      const btn = document.querySelector('#composer button[aria-haspopup="menu"]');
+      return btn.__dmpHarness.pickerProps.value;
+    }""")
+    first_card_text = page.locator('.dmp-card:not(.dmp-off):not(.dmp-add)').first.inner_text()
+    check('first card is not the live SWE-2 selection', 'SWE-2' not in first_card_text,
+        first_card_text[:80])
+    for key, label in [('Enter', 'Enter'), ('Space', 'Space')]:
+        page.wait_for_selector(panel + '.dmp-open', timeout=3000)
+        before_log, before_value = select_log(), current_value()
+        page.locator('.dmp-classic').focus()
+        page.keyboard.press(key)
+        page.wait_for_selector(menu, timeout=3000)
+        after_log, after_value = select_log(), current_value()
+        check('%s on classic does not call onModelSelect' % label, after_log == before_log,
+            '%s -> %s' % (before_log, after_log))
+        check('%s on classic keeps current model' % label, after_value == before_value,
+            '%s -> %s' % (before_value, after_value))
+        check('%s on classic opens native menu' % label, page.locator(menu).count() == 1)
+        page.evaluate("""() => {
+          const btn = document.querySelector('#composer button[aria-haspopup="menu"]');
+          btn.__dmpSetOpen(false);
+        }""")
+        page.wait_for_selector(menu, state='detached', timeout=3000)
+        page.wait_for_timeout(200)
+        page.locator('#composer [data-dmp-native-switch]').click()
+        page.wait_for_selector(panel + '.dmp-open', timeout=3000)
+        page.wait_for_timeout(80)
 
     # --- toolbar classic button: persists classic, closes panel, opens native ---
     # Instrument first: the public onOpenChange must be the path taken, and no
