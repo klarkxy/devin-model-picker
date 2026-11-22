@@ -499,7 +499,7 @@ window.__devinModelPicker = { version: '0.1.0' };
 console.log('[devin-model-picker] loaded');
 
 const CSS = `
-.dmp-panel{position:fixed;z-index:2147483000;width:min(720px,94vw);max-height:min(560px,70vh);
+.dmp-panel{position:fixed;z-index:2147483000;-webkit-app-region:no-drag;width:min(720px,94vw);max-height:min(480px,70vh);
  display:flex;flex-direction:column;border-radius:12px;border:1px solid var(--dmp-border);
  background:var(--dmp-bg);color:var(--dmp-fg);box-shadow:0 12px 40px rgba(0,0,0,.35);
  font:13px/1.4 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
@@ -1680,10 +1680,31 @@ function renderFusionFooter() {
   foot.prepend(apply);
 }
 
+// Bottom edge of the window's title bar: clicks on a drag region never reach
+// the page, so the panel must stay below it.
+function titleBarBottom() {
+  let bottom = 44;
+  try {
+    for (const x of [window.innerWidth / 2, window.innerWidth - 160, 160]) {
+      for (const node of document.elementsFromPoint(x, 4)) {
+        if (panel && panel.contains(node)) continue;
+        let hit = null;
+        for (let el = node; el && el !== document.body; el = el.parentElement) {
+          const style = getComputedStyle(el);
+          if ((style.webkitAppRegion || style.getPropertyValue('-webkit-app-region')) === 'drag') { hit = el; break; }
+        }
+        if (hit) { bottom = Math.max(bottom, Math.min(hit.getBoundingClientRect().bottom + 8, 120)); break; }
+      }
+    }
+  } catch {}
+  return bottom;
+}
+
 function positionPanel(trigger) {
   const rect = trigger.getBoundingClientRect();
-  const desired = 560;
-  const spaceAbove = rect.top - 8;
+  const desired = 480;
+  const minTop = titleBarBottom();
+  const spaceAbove = rect.top - 8 - minTop;
   const spaceBelow = window.innerHeight - rect.bottom - 8;
   const above = spaceAbove >= desired || (spaceBelow < desired && spaceAbove >= spaceBelow);
   const maxH = Math.max(120, Math.min(desired, above ? spaceAbove : spaceBelow));
@@ -1691,7 +1712,7 @@ function positionPanel(trigger) {
   const pw = panel.offsetWidth;
   const left = Math.min(Math.max(8, rect.right - pw), Math.max(8, window.innerWidth - pw - 8));
   panel.style.left = left + 'px';
-  panel.style.top = (above ? Math.max(8, rect.top - maxH - 8) : rect.bottom + 8) + 'px';
+  panel.style.top = (above ? Math.max(minTop, rect.top - maxH - 8) : rect.bottom + 8) + 'px';
 }
 
 function openPanel(trigger, located) {
