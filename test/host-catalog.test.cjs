@@ -65,12 +65,32 @@ test('native call identity, return, extra arguments, logout and disabled state a
   assert.ok(!JSON.stringify(f.logs).includes('test-do-not-log'));
   handle.dispose(); assert.equal(f.api.setAuthStatus, f.original);
 });
-test('late activation refreshes through the official non-disruptive command and coalesces pending calls', async () => {
+test('late activation refreshes through the plan-info command and coalesces pending calls', async () => {
   const f = fixture(), handle = f.install();
   const one = handle.refresh(), two = handle.refresh(); assert.equal(one, two); await one;
-  assert.deepEqual(f.commands, ['devin.refreshUserStatus']);
+  assert.deepEqual(f.commands, ['devin.updatePlanInfo']);
   await handle.refresh(); assert.equal(f.commands.length, 2);
   const scheduled = handle.refresh(); handle.dispose(); await scheduled; assert.equal(f.commands.length, 2);
+});
+test('a missing plan-info command falls back to the legacy refresh id and remembers it', async () => {
+  const f = fixture();
+  const handle = f.install({ executeCommand: async command => {
+    f.commands.push(command);
+    if (command === 'devin.updatePlanInfo') throw new Error('command not found');
+  } });
+  await handle.refresh();
+  assert.deepEqual(f.commands, ['devin.updatePlanInfo', 'devin.refreshUserStatus']);
+  await handle.refresh();
+  assert.deepEqual(f.commands.at(-1), 'devin.refreshUserStatus', 'the working command is retried first');
+  handle.dispose();
+});
+test('when neither refresh command exists the failure is logged once per refresh', async () => {
+  const f = fixture();
+  const handle = f.install({ executeCommand: async command => { f.commands.push(command); throw new Error('not found'); } });
+  await handle.refresh();
+  assert.deepEqual(f.commands, ['devin.updatePlanInfo', 'devin.refreshUserStatus']);
+  assert.deepEqual(f.logs.filter(event => event === 'host catalog refresh unavailable').length, 1);
+  handle.dispose();
 });
 test('transform failures do not interrupt authentication and newer wrappers survive disposal', () => {
   const f = fixture(), handle = f.install({ getCatalog() { throw new Error('secret'); } }), { status } = data();

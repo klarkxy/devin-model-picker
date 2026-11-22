@@ -10,11 +10,11 @@ const { createLsBridge } = require('./runtime/bridge.cjs');
 const { backendEnvironment } = require('./runtime/backend-env.cjs');
 const { runtimeIdentity, controlFile, PORT, MANAGEMENT_PROTOCOL } = require('./runtime/backend.cjs');
 const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } = require('./lifecycle/owned-settings.cjs');
-const { readNativeModels } = require('./runtime/native-models.cjs');
+const { readNativeModels, nativeSetSignature } = require('./runtime/native-models.cjs');
 const { createPickerRefresh } = require('./runtime/picker-refresh.cjs');
 const { isHostDisabled } = require('./lifecycle/host-disabled.cjs');
 const { applyInjection, removeInjection } = require('./inject.cjs');
-let stopNativeSync;
+let stopNativeSync, hostRefreshTimer;
 let restoreOnHostDisable;
 let connection;
 let acpInjection;
@@ -185,7 +185,14 @@ async function activate(context) {
   if (config().enabled !== false) void installAcp();
   const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...nativeModels.values()]); };
   const nativeModels = new Map(), localNativeModels = new Map();
-  let nativeCatalogStatus = 'loading', syncPending, syncAbort, syncTimer;
+  let nativeCatalogStatus = 'loading', syncPending, syncAbort, syncTimer, nativeSignature;
+  // Config writes arrive in bursts (connect → models merge → slot save); fold
+  // them into a single host catalog refresh.
+  const refreshHostCatalog = () => {
+    if (!hostCatalog) return;
+    clearTimeout(hostRefreshTimer);
+    hostRefreshTimer = setTimeout(() => { hostRefreshTimer = undefined; void hostCatalog.refresh(); }, 1000);
+  };
   const refreshNativeModels = () => {
     if (activationDisposed || config().enabled === false) return Promise.resolve();
     if (syncPending) return syncPending;
@@ -200,7 +207,13 @@ async function activate(context) {
       nativeModels.clear();
       for (const entry of localNativeModels.values()) nativeModels.set(entry.uid, entry);
       for (const entry of result.models) nativeModels.set(entry.uid, entry);
-      try { await hostCatalog?.refresh(); } catch {}
+      // The 3s poll only refreshes the host when the observed native set
+      // actually changed — otherwise it would ping Devin's server pointlessly.
+      const signature = nativeSetSignature(nativeModels.values());
+      if (signature !== nativeSignature) {
+        nativeSignature = signature;
+        try { await hostCatalog?.refresh(); } catch {}
+      }
     })().finally(() => { if (syncAbort === abort) { syncAbort = undefined; syncPending = undefined; } });
     return syncPending;
   };
@@ -350,7 +363,7 @@ async function activate(context) {
     await context.globalState.update('savedEnv', undefined);
     await context.globalState.update('managedEnv', undefined);
   };
-  const catalogChanged = () => { pickerRefresh.changed(); void hostCatalog?.refresh(); };
+  const catalogChanged = () => { pickerRefresh.changed(); refreshHostCatalog(); };
   const disable = async () => {
     const current = config(); current.enabled = false; writeConfig(configFile, current);
     await teardown();
@@ -373,7 +386,9 @@ async function activate(context) {
   })));
   const pickerRefresh = createPickerRefresh({ log,
     executeCommand: command => vscode.commands.executeCommand(command),
-    readModels: () => catalog().models });
+    // The CLI-side list includes hidden BYOK models, so its signature only
+    // changes when uids actually appear or disappear — not on visibility toggles.
+    readModels: () => catalog().cliModels || catalog().models });
   pickerRefresh.prime();
   context.subscriptions.push(pickerRefresh);
   context.subscriptions.push(vscode.commands.registerCommand('devinModelPicker.openSettings', run(async () => {
@@ -401,6 +416,7 @@ async function activate(context) {
 }
 async function teardown() {
   stopNativeSync?.(); stopNativeSync = undefined;
+  clearTimeout(hostRefreshTimer); hostRefreshTimer = undefined;
   activationGeneration++; runtimeWaitAbort?.abort();
   if (connection) { const current = connection; connection = undefined; await current.dispose(); }
   try { acpInjection?.dispose(); } catch {}

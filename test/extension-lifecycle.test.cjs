@@ -64,7 +64,8 @@ function fixture(t, initial = {}) {
     './runtime/host-catalog.cjs': { installHostCatalog: options => {
       calls.host.push(options); return { refresh: async () => { calls.refresh.push(1); }, dispose() {} };
     } },
-    './runtime/native-models.cjs': { readNativeModels: async () => ({ status: 'ready', models: [] }) },
+    './runtime/native-models.cjs': { readNativeModels: async () => ({ status: 'ready', models: [] }),
+      nativeSetSignature: () => '' },
   };
   const filename = path.resolve(extensionPath, 'src/extension.cjs');
   const realRequire = createRequire(filename);

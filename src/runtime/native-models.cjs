@@ -72,4 +72,11 @@ async function readNativeModels({ root, port = PORT, signal, request = fetch }) 
   });
   return { status: models.length ? 'ready' : 'empty', models };
 }
-module.exports = { readNativeModels };
+// Signature used to gate host-catalog refreshes: the 3s native poll only
+// refreshes when the observed native set actually changes.
+function nativeSetSignature(entries) {
+  return (Array.isArray(entries) ? entries : []).map(entry =>
+    `${entry?.uid ?? ''}\u0000${entry?.label ?? ''}\u0000${entry?.disabled === true}`)
+    .sort().join('\u0001');
+}
+module.exports = { readNativeModels, nativeSetSignature };

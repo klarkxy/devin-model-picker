@@ -5,7 +5,10 @@ const { augmentCatalog, collectNativeModels } = require('../catalog.cjs');
 const { m, fields } = require('../protocol/wire.cjs');
 const INSTANCE = Symbol.for('devin-model-picker.host-catalog.v1');
 const STATUS_RPC = '/exa.language_server_pb.LanguageServerService/GetUserStatus';
-const REFRESH_COMMAND = 'devin.refreshUserStatus';
+// Newer Devin builds expose devin.updatePlanInfo; older ones only have
+// devin.refreshUserStatus. The first command that succeeds is remembered.
+const REFRESH_COMMANDS = ['devin.updatePlanInfo', 'devin.refreshUserStatus'];
+const REFRESH_COMMAND = REFRESH_COMMANDS[1];
 
 // Recent Devin builds publish the renderer catalog through host auth instead
 // of the renderer's LS client. Only change the model data in UserStatus; all
@@ -64,7 +67,7 @@ function installHostCatalog({ nativeMainPath, vscode, stateDbPath, database, get
   }
   const descriptor = Object.getOwnPropertyDescriptor(api, 'setAuthStatus');
   const original = api.setAuthStatus;
-  let disposed = false, pending;
+  let disposed = false, pending, workingIndex = 0;
   const report = event => { try { log(event); } catch {} };
   function setAuthStatus(...args) {
     let status = args[0];
@@ -80,9 +83,15 @@ function installHostCatalog({ nativeMainPath, vscode, stateDbPath, database, get
   const handle = {
     refresh() {
       if (disposed || typeof executeCommand !== 'function') return Promise.resolve();
-      if (!pending) pending = Promise.resolve().then(() => {
-        if (!disposed) return executeCommand(REFRESH_COMMAND);
-      }).catch(() => { report('host catalog refresh unavailable'); }).finally(() => { pending = undefined; });
+      if (!pending) pending = Promise.resolve().then(async () => {
+        if (disposed) return;
+        const order = workingIndex === 0 ? REFRESH_COMMANDS : [REFRESH_COMMANDS[workingIndex], ...REFRESH_COMMANDS.slice(0, workingIndex)];
+        for (const command of order) {
+          try { await executeCommand(command); workingIndex = REFRESH_COMMANDS.indexOf(command); return; }
+          catch { /* fall back to the other command id */ }
+        }
+        report('host catalog refresh unavailable');
+      }).finally(() => { pending = undefined; });
       return pending;
     },
     dispose() {
@@ -102,4 +111,4 @@ function installHostCatalog({ nativeMainPath, vscode, stateDbPath, database, get
   return handle;
 }
 
-module.exports = { installHostCatalog, transformStatus, REFRESH_COMMAND };
+module.exports = { installHostCatalog, transformStatus, REFRESH_COMMAND, REFRESH_COMMANDS };

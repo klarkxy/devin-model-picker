@@ -207,6 +207,42 @@ function discoverOfficialRoles(nativeModels) {
     });
   }
 
+  // Beyond officially-paired fusion entries, every other routable native is a
+  // candidate too. Its derived lead harness is ['fusion', ...own harnessUids] —
+  // the same shape an official fusion entry encodes for its lead — and as
+  // sidekick it keeps its own harnessUids. Non-official native pairs are then
+  // routed through our fusion-dmp slots with these harnesses (hypothesis until
+  // verified live).
+  for (const [uid, native] of nativeModelsMap) {
+    if (native.disabled !== false || native.isModelRouter !== false) continue;
+    if (!Array.isArray(native.harnessUids) || !native.harnessUids.length) continue;
+    const effort = native.modelEffortDimension;
+    if (!eligibleNativeLeads.has(uid)) {
+      eligibleNativeLeads.set(uid, {
+        uid, label: native.label || uid,
+        leadDimension: null,
+        effortDimension: effort ? { order: effort.order, name: effort.name, controlType: 1 } : null,
+        ...(native.familyUid ? { familyUid: native.familyUid } : {}),
+        ...(native.familyLabel ? { familyLabel: native.familyLabel } : {}),
+        ...(effort ? { effortOrder: effort.order } : {}),
+        leadHarnessUids: ['fusion', ...native.harnessUids],
+        maxTokens: native.maxTokens,
+        maxOutputTokens: native.maxOutputTokens,
+        supportsImages: native.supportsImages,
+      });
+    }
+    if (!eligibleNativeSidekicks.has(uid)) {
+      eligibleNativeSidekicks.set(uid, {
+        uid, label: native.label || uid,
+        dimension: effort ? { order: effort.order, name: effort.name } : null,
+        ...(native.familyUid ? { familyUid: native.familyUid } : {}),
+        ...(native.familyLabel ? { familyLabel: native.familyLabel } : {}),
+        ...(effort ? { effort: effort.name, effortOrder: effort.order } : {}),
+        harnessUids: native.harnessUids,
+      });
+    }
+  }
+
   return { eligibleNativeLeads, eligibleNativeSidekicks };
 }
 
@@ -234,9 +270,9 @@ function resolveSlotRef(ref, role, routes, roles) {
 /** Build a secret-free catalog. Provider credentials stay solely in caller configuration. */
 function buildCatalog(config = {}, nativeModels = []) {
   if (config.enabled === false) {
-    return { models: [], routes: {}, fusions: {}, roles: { eligibleNativeLeads: new Map(), eligibleNativeSidekicks: new Map() } };
+    return { models: [], cliModels: [], routes: {}, fusions: {}, roles: { eligibleNativeLeads: new Map(), eligibleNativeSidekicks: new Map() } };
   }
-  const models = [], routes = {}, fusions = {}, leads = [];
+  const models = [], cliModels = [], routes = {}, fusions = {}, leads = [];
   const inferenceServerUrl = config.inferenceServerUrl || 'https://server.codeium.com';
   const inferenceUrl = new URL(inferenceServerUrl);
   if (!['http:', 'https:'].includes(inferenceUrl.protocol) || inferenceUrl.username || inferenceUrl.password) {
@@ -247,11 +283,15 @@ function buildCatalog(config = {}, nativeModels = []) {
   for (const provider of providers) {
     if (typeof provider.id !== 'string' || !provider.id) throw new Error('Provider id is required');
     for (const model of Array.isArray(provider.models) ? provider.models : []) {
-      if (!model || model.enabled === false) continue;
+      if (!model) continue;
       if (typeof model.id !== 'string' || !model.id) throw new Error('Model id is required');
       const key = JSON.stringify([provider.id, model.id]);
       if (identities.has(key)) throw new Error('Duplicate provider/model identity');
       identities.add(key);
+      // Disabled models still produce routes and CLI-side entries so a hidden
+      // BYOK uid keeps working in existing sessions and visibility toggles
+      // become a renderer-catalog-only change.
+      const enabled = model.enabled !== false;
       const prefix = provider.name || provider.id, sourceLabel = model.label || model.id;
       const familyLabel = sourceLabel.startsWith(prefix + ' · ') ? sourceLabel : `${prefix} · ${sourceLabel}`;
       const efforts = modelEfforts(model);
@@ -260,10 +300,10 @@ function buildCatalog(config = {}, nativeModels = []) {
         const uid = `dmp-${slug(provider.id)}-${slug(model.id)}-${digest([provider.id, model.id, effort]).slice(0, 16)}`;
         const contextWindow = positive(model.contextWindow, 272000);
         const maxOutputTokens = Math.min(positive(model.maxOutputTokens, 131072), contextWindow);
-        const lead = { uid, key, familyLabel, providerId: provider.id, model: model.id, effort,
+        const lead = { uid, key, familyLabel, providerId: provider.id, model: model.id, effort, enabled,
           contextWindow, maxOutputTokens, supportsImages: modelSupportsImages(model), inferenceServerUrl };
         leads.push(lead);
-        routes[uid] = { uid, providerId: provider.id, model: model.id, effort, contextWindow, maxOutputTokens,
+        routes[uid] = { uid, providerId: provider.id, model: model.id, effort, enabled, contextWindow, maxOutputTokens,
           supportsImages: lead.supportsImages, label: familyLabel + (effort ? ` ${effortMetadata(effort).name}` : '') };
       }
     }
@@ -280,9 +320,11 @@ function buildCatalog(config = {}, nativeModels = []) {
   for (const lead of leads) if (familyKeys.get(lead.familyLabel).size > 1) lead.familyLabel += ` (${lead.providerId}/${lead.model})`;
   for (const lead of leads) {
     const effort = effortMetadata(lead.effort);
-    models.push(configFor({ ...lead, label: lead.familyLabel + (lead.effort ? ` ${effort.name}` : ''),
+    const entry = configFor({ ...lead, label: lead.familyLabel + (lead.effort ? ` ${effort.name}` : ''),
       familyUid: 'dmp-family-' + digest(lead.key).slice(0, 16),
-      family: { modelFamilyLabel: lead.familyLabel, entries: [{ key: 'Effort', value: effort }] } }));
+      family: { modelFamilyLabel: lead.familyLabel, entries: [{ key: 'Effort', value: effort }] } });
+    cliModels.push(entry);
+    if (lead.enabled) models.push(entry);
   }
 
   // Two stable Fusion entries the renderer card picker alternates between.
@@ -296,9 +338,11 @@ function buildCatalog(config = {}, nativeModels = []) {
     const sidekick = configured ? resolveSlotRef(configured.sidekick, 'sidekick', routes, roles) : null;
     const contextWindow = lead?.contextWindow ?? 272000;
     const maxOutputTokens = Math.min(lead?.maxOutputTokens ?? 131072, contextWindow);
-    models.unshift(configFor({ uid, label: FUSION_GROUP,
+    const fusionConfig = configFor({ uid, label: FUSION_GROUP,
       familyUid: 'dmp-fusion-family', family: { modelFamilyLabel: FUSION_GROUP, entries: [] },
-      contextWindow, maxOutputTokens, supportsImages: lead?.supportsImages !== false, fusion: true, inferenceServerUrl }));
+      contextWindow, maxOutputTokens, supportsImages: lead?.supportsImages !== false, fusion: true, inferenceServerUrl });
+    models.unshift(fusionConfig);
+    cliModels.unshift(fusionConfig);
     if (lead && sidekick) {
       fusions[uid] = { uid, label: FUSION_GROUP, leadUid: lead.uid, sidekickUid: sidekick.uid,
         leadNative: lead.native, sidekickNative: sidekick.native,
@@ -306,7 +350,7 @@ function buildCatalog(config = {}, nativeModels = []) {
         ...(sidekick.native ? { sidekickHarnessUids: sidekick.harnessUids } : {}) };
     }
   }
-  return { models, routes, fusions, roles };
+  return { models, cliModels, routes, fusions, roles };
 }
 
 function rpcShape(rpc) {
@@ -315,7 +359,8 @@ function rpcShape(rpc) {
   value = value.split('?')[0];
   const method = value.slice(value.lastIndexOf('/') + 1);
   if (method === 'GetUserStatus') return { status: true, field: 1, sorts: true };
-  if (['GetCliModelConfigs', 'GetCascadeModelConfigs', 'GetCommandModelConfigs'].includes(method)) return { status: false, sorts: method === 'GetCascadeModelConfigs' };
+  if (['GetCliModelConfigs', 'GetCascadeModelConfigs', 'GetCommandModelConfigs'].includes(method))
+    return { status: false, sorts: method === 'GetCascadeModelConfigs', cli: method === 'GetCliModelConfigs' };
   return null;
 }
 
@@ -667,18 +712,23 @@ function augmentCatalog(data, { rpc, format = {}, catalog, onNativeModels } = {}
   if (rpc === '/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings') return augmentLocalModelChoices(data, format, catalog);
   const shape = rpcShape(rpc);
   if (!shape || !catalog) return data;
-  if (!catalog.models?.length && typeof onNativeModels !== 'function') return data;
+  // The CLI intersects its session options with the renderer catalog, so the
+  // CLI-side lists carry every imported BYOK model (hidden ones included);
+  // visibility toggles then only need a renderer-catalog refresh.
+  const modelList = shape.cli && Array.isArray(catalog.cliModels) ? catalog.cliModels : catalog.models;
+  if (!modelList?.length && typeof onNativeModels !== 'function') return data;
+  const scoped = modelList === catalog.models ? catalog : { ...catalog, models: modelList };
   try {
     if (format.json === true) {
-      if (!shape.status) return augmentJsonList(data, catalog, shape.sorts, onNativeModels);
+      if (!shape.status) return augmentJsonList(data, scoped, shape.sorts, onNativeModels);
       const statusKey = jsonKey(data, 'userStatus', 'user_status'), status = data?.[statusKey];
       if (!status || typeof status !== 'object' || Array.isArray(status)) return data;
       const configKey = jsonKey(status, 'cascadeModelConfigData', 'cascade_model_config_data');
-      return { ...data, [statusKey]: { ...status, [configKey]: augmentJsonList(status[configKey] || {}, catalog, true, onNativeModels) } };
+      return { ...data, [statusKey]: { ...status, [configKey]: augmentJsonList(status[configKey] || {}, scoped, true, onNativeModels) } };
     }
     if (!Buffer.isBuffer(data)) return data;
-    if (!shape.status) return augmentProtoList(data, catalog, shape.sorts, onNativeModels);
-    return rewriteMessage(data, shape.field, status => rewriteMessage(status, 33, list => augmentProtoList(list, catalog, true, onNativeModels), true));
+    if (!shape.status) return augmentProtoList(data, scoped, shape.sorts, onNativeModels);
+    return rewriteMessage(data, shape.field, status => rewriteMessage(status, 33, list => augmentProtoList(list, scoped, true, onNativeModels), true));
   } catch { return data; }
 }
 
@@ -712,7 +762,8 @@ function collectNativeModels(data, { rpc, format = {} } = {}) {
 // only locally routed BYOK models; native choices and every other setting stay
 // byte-identical. A native Sidekick must already be in the native choice list.
 function augmentLocalModelChoices(data, format, catalog) {
-  if (!catalog?.models?.length) return data;
+  const list = catalog?.cliModels ?? catalog?.models;
+  if (!list?.length) return data;
   try {
     const key = format.json ? jsonKey(data, 'allowedModelUids', 'allowed_model_uids') : null;
     const parsed = format.json ? null : parseFields(data);
@@ -724,7 +775,7 @@ function augmentLocalModelChoices(data, format, catalog) {
     if (entries === undefined || Array.isArray(entries) && entries.length === 0) return data;
     if (!Array.isArray(entries) || entries.some(uid => typeof uid !== 'string')) return data;
     const native = new Set(entries.filter(uid => !ownUid(uid)));
-    const additions = catalog.models.filter(model => {
+    const additions = list.filter(model => {
       if (!ownUid(model.uid)) return false;
       if (Object.hasOwn(catalog.routes, model.uid)) return true;
       const fusion = catalog.fusions[model.uid];

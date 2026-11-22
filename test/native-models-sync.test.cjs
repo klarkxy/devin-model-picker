@@ -170,3 +170,15 @@ test('readNativeModels retries a reset pooled connection once and still fails on
   await assert.rejects(readNativeModels({ root: os.tmpdir(), port: 1, request: down }), /fetch failed/);
   assert.equal(refused, 1, 'a refused connection is not retried');
 });
+
+test('nativeSetSignature changes only with the native set, not call order', () => {
+  const { nativeSetSignature } = require('../src/runtime/native-models.cjs');
+  const a = [{ uid: 'x', label: 'X', disabled: false }, { uid: 'y', label: 'Y' }];
+  const b = [{ uid: 'y', label: 'Y' }, { uid: 'x', label: 'X', disabled: false }];
+  assert.equal(nativeSetSignature(a), nativeSetSignature(b), 'order-insensitive');
+  assert.notEqual(nativeSetSignature(a), nativeSetSignature([{ uid: 'x', label: 'X' }]), 'set change detected');
+  assert.notEqual(nativeSetSignature(a), nativeSetSignature([{ uid: 'x', label: 'X', disabled: true }, { uid: 'y', label: 'Y' }]),
+    'disabled flag is part of the signature');
+  assert.notEqual(nativeSetSignature(a), nativeSetSignature([{ uid: 'x', label: 'X2' }, { uid: 'y', label: 'Y' }]),
+    'label change detected');
+});

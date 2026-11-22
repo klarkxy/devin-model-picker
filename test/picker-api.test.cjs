@@ -369,3 +369,17 @@ test('/picker/providers/connect upstream probe failure → 400 with Chinese mess
   assert.match(res.body.message, /无法连接/);
   assert.equal(config.providers.length, 0, 'nothing persisted');
 });
+
+test('disabled BYOK routes stay routable but leave candidates and picker state', async () => {
+  const { candidates, pickerState } = require('../src/picker-api.cjs');
+  const { buildCatalog } = require('../src/catalog.cjs');
+  const config = { providers: [{ id: 'p', name: 'P', apiFormat: 'openai', baseUrl: 'https://x.invalid', apiKey: 'k',
+    models: [{ id: 'on', label: 'On', efforts: [null] }, { id: 'off', label: 'Off', efforts: [null], enabled: false }] }] };
+  const catalog = buildCatalog(config, []);
+  const lists = candidates(catalog, config);
+  const byokUids = lists.leads.filter(item => item.ref.kind === 'byok').map(item => item.ref.uid);
+  assert.equal(byokUids.length, 1, 'only the enabled route is a candidate');
+  const state = pickerState({ version: 'x', catalog, config });
+  assert.equal(Object.keys(state.byok).length, 1, 'picker state hides disabled routes');
+  assert.equal(Object.keys(catalog.routes).length, 2, 'routes still carry the disabled model');
+});

@@ -975,15 +975,23 @@ async function pickerPost(path, body) {
 }
 
 // After a write, the catalog updates once config.json has propagated to the
-// host — poll until every BYOK uid is visible again (or ~10s pass).
-async function pollForRefresh() {
-  const deadline = Date.now() + 10000;
+// host — poll until every BYOK uid is visible again. Visibility toggles land
+// within seconds; new uids (connect/refresh/delete) must also wait out the
+// CLI's ~60s session-option cache, so keep polling for up to ~90s.
+async function pollForRefresh(longWait = false) {
+  const started = Date.now();
+  const deadline = started + (longWait ? 90000 : 10000);
+  let announced = false;
   while (panelState && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 500));
     await fetchState();
     refreshLocated();
     const visible = new Set((panelState?.located?.host?.visibleModelConfigs || []).map(model => model.modelUid));
     if (!Object.keys(lastState?.byok || {}).some(uid => !visible.has(uid))) break;
+    if (longWait && !announced && Date.now() - started >= 10000) {
+      announced = true;
+      if (panelState) { panelState.status = '已更新，新模型会在新会话中出现'; renderFoot(); }
+    }
   }
   if (!panelState) return;
   panelState.status = '';
@@ -1000,11 +1008,11 @@ async function refreshProviders() {
   renderProviders();
 }
 
-function afterCatalogEdit(message) {
+function afterCatalogEdit(message, longWait = false) {
   if (!panelState) return;
   panelState.status = message;
   renderFoot();
-  pollForRefresh();
+  pollForRefresh(longWait);
 }
 
 // --- Providers tab -----------------------------------------------------------
@@ -1144,7 +1152,7 @@ function renderProvAdd(box) {
     if (res.error) { err.textContent = res.message || '\u8fde\u63a5\u5931\u8d25'; return; }
     panelState.provSel = res.provider.id;
     await refreshProviders();
-    afterCatalogEdit('\u5df2\u8fde\u63a5 ' + res.provider.name + '\uff0c\u6b63\u5728\u5237\u65b0\u2026');
+    afterCatalogEdit('\u5df2\u8fde\u63a5 ' + res.provider.name + '\uff0c\u6b63\u5728\u5237\u65b0\u2026', true);
   };
   submit.addEventListener('click', connect);
   key.addEventListener('keydown', event => { if (event.key === 'Enter') connect(); });
@@ -1205,7 +1213,7 @@ function renderProvDetail(box, provider) {
     if (!panelState) return;
     if (res.error) { refresh.disabled = false; refresh.textContent = '\u5237\u65b0\u6a21\u578b'; panelState.provError = res.message; renderProviders(); return; }
     await refreshProviders();
-    afterCatalogEdit('\u5df2\u5237\u65b0\u6a21\u578b\u5217\u8868\uff0c\u6b63\u5728\u66f4\u65b0\u2026');
+    afterCatalogEdit('\u5df2\u5237\u65b0\u6a21\u578b\u5217\u8868\uff0c\u6b63\u5728\u66f4\u65b0\u2026', true);
   });
   acts.appendChild(refresh);
   if (panelState.provEdit === 'key') {
@@ -1243,7 +1251,7 @@ function renderProvDetail(box, provider) {
     if (!panelState) return;
     if (res.error) { panelState.provSel = provider.id; panelState.provError = res.message; renderProviders(); return; }
     await refreshProviders();
-    afterCatalogEdit('\u5df2\u5220\u9664\u4f9b\u5e94\u5546\uff0c\u6b63\u5728\u5237\u65b0\u2026');
+    afterCatalogEdit('\u5df2\u5220\u9664\u4f9b\u5e94\u5546\uff0c\u6b63\u5728\u5237\u65b0\u2026', true);
   });
   acts.appendChild(del);
   head.appendChild(acts);

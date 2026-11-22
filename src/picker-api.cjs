@@ -39,6 +39,7 @@ function candidates(catalog, config) {
   const leads = [], sidekicks = [];
   const providers = new Map((Array.isArray(config.providers) ? config.providers : []).map(p => [p.id, p]));
   for (const route of Object.values(catalog.routes || {})) {
+    if (route.enabled === false) continue;
     const provider = providers.get(route.providerId);
     const model = provider && Array.isArray(provider.models)
       ? provider.models.find(item => item && item.id === route.model) : null;
@@ -93,6 +94,7 @@ function pickerState({ version, catalog, config }) {
   const byok = {};
   const providers = new Map((Array.isArray(config.providers) ? config.providers : []).map(p => [p.id, p]));
   for (const route of Object.values(catalog.routes || {})) {
+    if (route.enabled === false) continue;
     const provider = providers.get(route.providerId);
     byok[route.uid] = {
       providerId: route.providerId, providerName: provider?.name || route.providerId,
