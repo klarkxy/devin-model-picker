@@ -374,12 +374,152 @@ test('hidden prefs only hide Devin families: a same-named BYOK model keeps the c
 });
 
 test('single-mode families know they are BYOK from the uid even before /picker/state loads', () => {
-  const cards = picker.groupCards([
-    { modelUid: 'kimi-k3-1-pro-high', label: 'Kimi K3.1 Pro High', familyUid: 'kimi-k3-1-pro', familyLabel: 'Kimi K3.1 Pro',
-      familyMetadata: { Effort: { order: 1, name: 'High' } }, displayOption: 'standard-picker' },
-    { modelUid: 'dmp-magpie-kimi-k3-1-pro-0123456789abcdef', label: 'Magpie · Kimi K3.1 Pro', displayOption: 'standard-picker' },
-  ], null);
+  const nativeModel = { modelUid: 'kimi-k3-1-pro-high', label: 'Kimi K3.1 Pro High', familyUid: 'kimi-k3-1-pro', familyLabel: 'Kimi K3.1 Pro',
+    familyMetadata: { Effort: { order: 1, name: 'High' } }, displayOption: 'standard-picker' };
+  const byokModel = { modelUid: 'dmp-magpie-kimi-k3-1-pro-0123456789abcdef', label: 'Magpie · Kimi K3.1 Pro', displayOption: 'standard-picker' };
+  const cards = picker.groupCards([nativeModel, byokModel], null);
   const families = cards.flatMap(card => card.families);
-  assert.ok(families.some(family => family.byok === true));
-  assert.ok(families.some(family => family.byok === false));
+  const byokFamily = families.find(family => family.byok === true);
+  const nativeFamily = families.find(family => family.byok === false);
+  assert.ok(byokFamily);
+  assert.ok(nativeFamily);
+  const byokVariant = byokFamily.variants[0];
+  const nativeVariant = nativeFamily.variants[0];
+  assert.equal(byokVariant.native, false, 'dmp- uid is BYOK before state.byok exists');
+  assert.equal(byokVariant.model, undefined, 'BYOK never carries a native model for getCostTag');
+  assert.equal(nativeVariant.native, true);
+  assert.equal(nativeVariant.model, nativeModel);
+  const seen = [];
+  const located = { host: { getCostTag(model) {
+    seen.push(model?.modelUid);
+    return { label: String(model?.modelUid || '').startsWith('dmp-') ? 'API' : '1x' };
+  } } };
+  const tagFor = variant => variant?.native === true ? picker.costTagFor(located, variant.model) : null;
+  assert.equal(tagFor(byokVariant), null, 'first render must not show the native API tripwire on BYOK');
+  assert.deepEqual(tagFor(nativeVariant), { label: '1x', tooltip: undefined });
+  assert.deepEqual(seen, [nativeModel.modelUid], 'getCostTag is never called with a dmp- model');
+});
+
+test('viewMode defaults to cards, honors classic, tolerates garbage input', () => {
+  assert.equal(picker.viewMode(undefined), 'cards');
+  assert.equal(picker.viewMode(null), 'cards');
+  assert.equal(picker.viewMode({}), 'cards');
+  assert.equal(picker.viewMode('classic'), 'cards', 'a bare string is not the LS data object');
+  assert.equal(picker.viewMode({ view: 'classic' }), 'classic');
+  assert.equal(picker.viewMode({ view: 'cards' }), 'cards');
+  assert.equal(picker.viewMode({ view: 'weird' }), 'cards');
+  assert.equal(picker.viewMode({ view: 0 }), 'cards');
+});
+
+test('costTagFor asks the host callback and never guesses', () => {
+  const located = model => ({ host: { getCostTag: () => model } });
+  assert.deepEqual(picker.costTagFor(located({ label: '2.5x', tooltip: 'Devin Credits：按量' }), { m: 1 }),
+    { label: '2.5x', tooltip: 'Devin Credits：按量' });
+  assert.deepEqual(picker.costTagFor(located({ label: 'free' }), { m: 1 }), { label: 'free', tooltip: undefined });
+  assert.equal(picker.costTagFor(located({ label: '  ' }), { m: 1 }), null, 'blank labels render nothing');
+  assert.equal(picker.costTagFor(located(undefined), { m: 1 }), null, 'undefined return → no tag');
+  assert.equal(picker.costTagFor(located(null), { m: 1 }), null);
+  assert.equal(picker.costTagFor(located('1x'), { m: 1 }), null, 'a non-object return is ignored');
+  assert.equal(picker.costTagFor(located({ label: 42 }), { m: 1 }), null, 'non-string labels are ignored');
+  assert.equal(picker.costTagFor({ host: { getCostTag: () => { throw new Error('host bug'); } } }, { m: 1 }),
+    null, 'a throwing callback stays quiet');
+  assert.equal(picker.costTagFor({ host: { getCostTag: 'not-a-fn' } }, { m: 1 }), null, 'non-function → no call');
+  assert.equal(picker.costTagFor({ host: {} }, { m: 1 }), null, 'missing callback → no tag');
+  assert.equal(picker.costTagFor({ host: { getCostTag: () => ({ label: '1x' }) } }, null),
+    null, 'no model → never called');
+  assert.equal(picker.costTagFor(null, { m: 1 }), null);
+  let calls = 0;
+  picker.costTagFor({ host: { getCostTag: () => { calls++; } } }, undefined);
+  assert.equal(calls, 0, 'the callback is never invoked without a model');
+});
+
+test('groupCards variants keep the native model; BYOK variants carry none', () => {
+  const nativeModel = { modelUid: 'native-other', label: 'Other Model', familyUid: 'fam-o',
+    provider: 'openai', modelCost: { type: 'credit', multiplier: 2.5 } };
+  const cards = picker.groupCards([
+    { modelUid: 'dmp-p-model-x-1', label: 'P · Model X' },
+    nativeModel,
+  ], { byok: { 'dmp-p-model-x-1': { providerId: 'p', providerName: 'P', modelId: 'model-x',
+    label: 'P · Model X', effort: null } } });
+  const byokVariant = cards.find(card => card.families.some(family => family.byok))
+    .families.find(family => family.byok).variants[0];
+  const nativeVariant = cards.find(card => card.families.every(family => !family.byok)).families[0].variants[0];
+  assert.equal(nativeVariant.native, true);
+  assert.equal(nativeVariant.model, nativeModel, 'the visibleModelConfigs entry is passed by reference');
+  assert.equal(byokVariant.native, false);
+  assert.equal(byokVariant.model, undefined, 'BYOK never reaches the native cost callback');
+});
+
+test('groupFusion variants keep native models via the nativeIndex; BYOK stays isolated', () => {
+  const nativeModel = { modelUid: 'nat-1', label: 'N One', familyUid: 'fam-n',
+    modelCost: { type: 'credit', multiplier: 1 } };
+  const cards = picker.groupFusion([
+    { ref: { kind: 'byok', uid: 'dmp-p-m-1' }, label: 'Model X', providerName: 'P',
+      effort: null, familyKey: 'byok:p:m' },
+    { ref: { kind: 'native', uid: 'nat-1' }, label: 'N One', providerName: 'Devin', effort: null, familyKey: 'fam-n' },
+  ], new Map([['nat-1', nativeModel]]));
+  const nativeCard = cards.find(card => !card.byok);
+  const byokCard = cards.find(card => card.byok);
+  assert.equal(nativeCard.variants[0].native, true);
+  assert.equal(nativeCard.variants[0].model, nativeModel, 'same ref from the nativeIndex');
+  assert.equal(byokCard.variants[0].native, false);
+  assert.equal(byokCard.variants[0].model, undefined);
+});
+
+test('selectedVariant prefers live, then the card state match, then the default', () => {
+  const family = { variants: [
+    { uid: 'a', effortOrder: 1, toggles: {}, isDefault: true },
+    { uid: 'b', effortOrder: 3, toggles: {} },
+    { uid: 'c', effortOrder: 5, toggles: { thinking: 1 } },
+  ], cells: [{ order: 1 }, { order: 3 }, { order: 5 }], toggles: ['thinking'] };
+  assert.equal(picker.selectedVariant(family, { effortOrder: 3, toggles: {} }, family.variants[1]).uid, 'b',
+    'the live selection always wins');
+  assert.equal(picker.selectedVariant(family, { effortOrder: 5, toggles: { thinking: 1 } }, null).uid, 'c',
+    'effort + toggles pick their variant when nothing is live');
+  assert.equal(picker.selectedVariant(family, { effortOrder: 2, toggles: {} }, null).uid, 'a',
+    'no match falls back to the family default');
+  assert.equal(picker.selectedVariant(family, null, null).uid, 'a', 'no state at all still resolves');
+});
+
+test('classic view is wired into the capture listeners and the switch affordances exist', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8');
+  const listeners = source.slice(source.indexOf("['pointerdown', 'mousedown', 'click']"));
+  assert.ok(listeners.includes("view === 'classic'"), 'pointer/mouse/click capture bails on classic view');
+  assert.ok(listeners.includes('data-dmp-native-switch'), 'capture yields to the switch before the trigger check');
+  assert.ok(source.includes('data-dmp-native-switch') && source.includes('经典选择器'), 'both switch entries exist');
+  const classicBody = source.slice(source.indexOf('function openClassic'), source.indexOf('function nativeSwitch'));
+  assert.ok(classicBody.includes('openChangeFor(trigger'), 'the public onOpenChange is the primary path');
+  assert.ok(classicBody.indexOf('openChangeFor(trigger') < classicBody.indexOf('dispatchEvent'),
+    'event replay is only the no-callback fallback');
+});
+
+test('Enter and Space on the classic switch skip first-card hotkeys', () => {
+  const switchBtn = { tagName: 'BUTTON', classList: { contains: name => name === 'dmp-classic' },
+    closest: sel => sel === '.dmp-classic' ? switchBtn : null };
+  const switchChild = { tagName: 'SPAN', classList: { contains: () => false },
+    closest: sel => sel === '.dmp-classic' ? switchBtn : null };
+  const card = { tagName: 'DIV', classList: { contains: () => false }, closest: () => null };
+  assert.equal(picker.skipsPanelHotkeys(switchBtn), true);
+  assert.equal(picker.skipsPanelHotkeys(switchChild), true);
+  assert.equal(picker.skipsPanelHotkeys(card), false);
+  assert.equal(picker.skipsPanelHotkeys({ tagName: 'INPUT' }), true);
+  assert.equal(picker.skipsPanelHotkeys({ tagName: 'TEXTAREA' }), true);
+  assert.equal(picker.skipsPanelHotkeys({ tagName: 'DIV', isContentEditable: true }), true);
+  assert.equal(picker.skipsPanelHotkeys(null), false);
+  const source = fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8');
+  const onKey = source.slice(source.indexOf('const onKey = event'), source.indexOf("document.addEventListener('keydown', onKey"));
+  assert.ok(onKey.includes('skipsPanelHotkeys'), 'panel key handler consults skipsPanelHotkeys');
+  assert.ok(onKey.indexOf('skipsPanelHotkeys') < onKey.indexOf("event.key === 'Enter'"),
+    'view switch is skipped before first-card Enter');
+  assert.ok(onKey.indexOf('skipsPanelHotkeys') < onKey.indexOf('event.key.length === 1'),
+    'view switch is skipped before Space/typeahead steals focus');
+  assert.ok(!onKey.includes('onModelSelect'), 'the key handler never selects a model itself');
+});
+
+test('verify-classic.py launches default Playwright Chromium with an env override', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../dev/verify-classic.py'), 'utf8');
+  assert.ok(source.includes("os.environ.get('DMP_CHROMIUM')"), 'DMP_CHROMIUM overrides the executable');
+  assert.ok(source.includes('pw.chromium.launch(**chromium_launch_kwargs())'),
+    'launch uses kwargs so a missing Windows path does not crash');
+  assert.ok(source.includes('return {}'), 'no override and no Windows cache → default Chromium');
 });

@@ -30,11 +30,16 @@
       model('swe-1p6', 'SWE-1.6', { provider: 'windsurf', isDefaultModelInFamily: true, ...fam('fam-swe16', 'SWE-1.6', {}) }),
       model('swe-1p7-medium', 'SWE-1.7 Medium', { provider: 'windsurf', ...fam('fam-swe17', 'SWE-1.7', effort(2, 'Medium')) }),
       model('swe-2-flash', 'SWE-2 Flash', { provider: 'windsurf', modelCost: { type: 'free' }, ...fam('fam-swe2', 'SWE-2', effort(1, 'Flash')) }),
-      model('swe-2-high', 'SWE-2 High', { provider: 'windsurf', isDefaultModelInFamily: true, ...fam('fam-swe2', 'SWE-2', effort(3, 'High')) }),
-      model('swe-2-max', 'SWE-2 Max', { provider: 'windsurf', ...fam('fam-swe2', 'SWE-2', effort(5, 'Max')) }),
-      model('claude-opus-5-5-low', 'Claude Opus 5.5 Low', { provider: 'anthropic', ...fam('fam-opus', 'Claude Opus 5.5', effort(1, 'Low')) }),
-      model('claude-opus-5-5-medium', 'Claude Opus 5.5 Medium', { provider: 'anthropic', isDefaultModelInFamily: true, ...fam('fam-opus', 'Claude Opus 5.5', effort(2, 'Medium')) }),
-      model('claude-opus-5-5-high', 'Claude Opus 5.5 High', { provider: 'anthropic', ...fam('fam-opus', 'Claude Opus 5.5', effort(3, 'High')) }),
+      model('swe-2-high', 'SWE-2 High', { provider: 'windsurf', isDefaultModelInFamily: true,
+        modelCost: { type: 'credit', multiplier: 1 }, ...fam('fam-swe2', 'SWE-2', effort(3, 'High')) }),
+      model('swe-2-max', 'SWE-2 Max', { provider: 'windsurf',
+        modelCost: { type: 'credit', multiplier: 2.5 }, ...fam('fam-swe2', 'SWE-2', effort(5, 'Max')) }),
+      model('claude-opus-5-5-low', 'Claude Opus 5.5 Low', { provider: 'anthropic',
+        modelCost: { type: 'credit', multiplier: 0.5 }, ...fam('fam-opus', 'Claude Opus 5.5', effort(1, 'Low')) }),
+      model('claude-opus-5-5-medium', 'Claude Opus 5.5 Medium', { provider: 'anthropic', isDefaultModelInFamily: true,
+        modelCost: { type: 'credit', multiplier: 1 }, ...fam('fam-opus', 'Claude Opus 5.5', effort(2, 'Medium')) }),
+      model('claude-opus-5-5-high', 'Claude Opus 5.5 High', { provider: 'anthropic',
+        modelCost: { type: 'credit', multiplier: 2.5 }, ...fam('fam-opus', 'Claude Opus 5.5', effort(3, 'High')) }),
       model('muse-wonder-high', 'Muse Wonder High', { provider: 'xai', ...fam('fam-muse', 'Muse Wonder', effort(3, 'High')) }),
       model('nemotron-3-5-lightning', 'Nemotron 3.5 Lightning', { provider: 'nvidia', ...fam('fam-nemo', 'Nemotron 3.5', effort(1, 'Lightning')) }),
       model('gemini-4-argon', 'Gemini 4 Argon', { provider: 'google', ...fam('fam-gem4', 'Gemini 4', effort(1, 'Argon')) }),
@@ -50,13 +55,14 @@
       model('fusion-dmp-b', 'BYOK Fusion', { displayOption: 'model-router', provider: 'windsurf', familyMetadata: {} }),
     ];
     const visibleModelConfigs = window.DMP_VMC_OVERRIDE || [...byokModels, ...natives, fusionEntry, ...dmpFusions];
+    const cand = e => ({ ref: { kind: 'byok', uid: e.uid }, label: e.label.replace(/^.*? · /, ''), providerName: e.providerName, effort: e.effort, familyKey: 'byok:' + e.providerId + ':' + e.modelId });
     const leads = [
-      ...Object.values(byok).map(e => ({ ref: { kind: 'byok', uid: e.uid }, label: e.label.replace(/^.*? · /, ''), providerName: e.providerName, effort: e.effort, familyKey: 'byok:' + e.providerId + ':' + e.modelId })),
+      ...Object.values(byok).map(cand),
       { ref: { kind: 'native', uid: 'claude-opus-5-5-high' }, label: 'Claude Opus 5.5 High', providerName: 'Devin', effort: null, familyKey: 'fam-opus' },
       { ref: { kind: 'native', uid: 'swe-2-high' }, label: 'SWE-2 High', providerName: 'Devin', effort: null, familyKey: 'fam-swe2' },
     ];
     const sidekicks = [
-      ...Object.values(byok).map(e => ({ ref: { kind: 'byok', uid: e.uid }, label: e.label.replace(/^.*? · /, ''), providerName: e.providerName, effort: e.effort, familyKey: 'byok:' + e.providerId + ':' + e.modelId })),
+      ...Object.values(byok).map(cand),
       { ref: { kind: 'native', uid: 'swe-2-high' }, label: 'SWE-2 High', providerName: 'Devin', effort: null, familyKey: 'fam-swe2' },
       { ref: { kind: 'native', uid: 'swe-2-max' }, label: 'SWE-2 Max', providerName: 'Devin', effort: null, familyKey: 'fam-swe2' },
     ];
@@ -262,11 +268,55 @@
   })();
 
   // Fake React fiber chain: button → trigger wrapper → host → LocalModelPicker.
+  // The trigger also behaves like the real component: pointer/click/keyboard
+  // events that reach it open a native menu, portaled to <body> with the
+  // picker's own root props on its fiber chain.
   window.DMP_FIBER = root => {
     const selected = [];
     const log = document.getElementById('dmp-harness-log');
+    let menuEl = null;
+    const setOpen = open => {
+      if (open && !menuEl) {
+        menuEl = document.createElement('div');
+        menuEl.setAttribute('role', 'menu');
+        menuEl.setAttribute('data-native-menu', '');
+        for (const cfg of (root.visibleModelConfigs || []).slice(0, 8)) {
+          const item = document.createElement('button');
+          item.setAttribute('role', 'menuitem');
+          item.textContent = cfg.label || cfg.modelUid;
+          item.addEventListener('click', event => {
+            event.stopPropagation();
+            hostProps.onModelSelect({ modelUid: cfg.modelUid });
+            try { pickerProps.onSelect?.(); } catch {}
+            setOpen(false);
+          });
+          menuEl.appendChild(item);
+        }
+        // Portal fiber: the menu element's chain carries the same rootPicker
+        // props object the trigger resolves to — the real render shares it.
+        const menuProps = { role: 'menu' };
+        menuEl.__reactFiber$menu = { memoizedProps: menuProps, alternate: null,
+          return: { memoizedProps: pickerProps, return: null } };
+        menuEl.__reactProps$menu = menuProps;
+        document.body.appendChild(menuEl);
+      } else if (!open && menuEl) {
+        menuEl.remove();
+        menuEl = null;
+      }
+    };
     const hostProps = {
-      open: false, onOpenChange() {}, visibleModelConfigs: root.visibleModelConfigs,
+      open: false, onOpenChange: setOpen, visibleModelConfigs: root.visibleModelConfigs,
+      // Mirrors Devin's getCostTag(model) → { label, tooltip }: credit
+      // multiplier → 'Nx', free → 'free', BYOK → 'API' (a tripwire — the
+      // renderer must never ask for a BYOK tag), none → null.
+      getCostTag(model) {
+        if (String(model?.modelUid || '').startsWith('dmp-')) return { label: 'API', tooltip: 'BYOK 供应商' };
+        const cost = model?.modelCost;
+        if (!cost) return null;
+        if (cost.type === 'free' || cost.tier === 'free') return { label: 'free', tooltip: 'Devin Credits：免费' };
+        if (typeof cost.multiplier === 'number') return { label: (+cost.multiplier.toFixed(3)) + 'x', tooltip: 'Devin Credits：按量计费' };
+        return null;
+      },
       selectedModels: [], recentlyUsedModels: [], modelSorts: [],
       onModelSelect(payload) {
         selected.push(payload);
@@ -275,9 +325,10 @@
         pickerProps.value = payload.modelUid;
       },
     };
-    const pickerProps = { connectorId: 'c', modelConfig: {}, value: 'swe-2-high', onSelect() {}, disabled: false, onClose() {} };
+    const pickerProps = { connectorId: 'c', modelConfig: {}, value: 'swe-2-high',
+      onSelect() {}, disabled: false, onClose: () => setOpen(false), onOpenChange: setOpen };
     const chain = {
-      memoizedProps: { label: 'SWE-2', tooltip: '', open: false, onOpenChange() {} },
+      memoizedProps: { label: 'SWE-2', tooltip: '', open: false, onOpenChange: setOpen },
       return: { memoizedProps: hostProps, return: { memoizedProps: pickerProps, return: null } },
     };
     const button = document.createElement('button');
@@ -290,6 +341,14 @@
     button.__reactFiber$test = { memoizedProps: domProps, alternate: null, return: chain };
     button.__reactProps$test = domProps;
     button.__dmpSelectLog = selected;
+    // The component's own listeners — reached only when our capture layer lets
+    // the event through (Alt, classic view, or the replayed Alt sequence).
+    button.addEventListener('click', () => setOpen(true));
+    button.addEventListener('keydown', event => {
+      if (['Enter', ' ', 'ArrowDown'].includes(event.key)) setOpen(true);
+    });
+    button.__dmpSetOpen = setOpen;
+    button.__dmpHarness = { hostProps, pickerProps };
     return { button, hostProps, pickerProps, selected };
   };
 })();

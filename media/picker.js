@@ -233,7 +233,10 @@ function groupCards(models, state) {
     if (HIDDEN_DISPLAY.has(model.displayOption)) continue;
     if (uid.startsWith('fusion-')) continue;
     if (model.familyMetadata && typeof model.familyMetadata === 'object' && model.familyMetadata.Lead) continue;
-    const byokEntry = uid.startsWith('dmp-') ? byok[uid] : undefined;
+    // UID prefix is the source of truth for BYOK, including the first render
+    // before /picker/state arrives (byok[uid] is empty then).
+    const isByok = uid.startsWith('dmp-');
+    const byokEntry = isByok ? byok[uid] : undefined;
     // BYOK families are per provider+model (one dropdown entry each); native
     // families use the server familyUid. Families then merge across providers
     // into one card via cardKey.
@@ -258,6 +261,10 @@ function groupCards(models, state) {
       isDefault: byokEntry ? byokEntry.effort === null : model.isDefaultModelInFamily === true,
       free: model.modelCost?.type === 'free' || model.modelCost?.tier === 'free',
       supportsImages: model.supportsImages !== false,
+      // Native variants keep their visibleModelConfigs entry — the host's
+      // getCostTag prices exactly that object. BYOK never carries it, even
+      // when state.byok has not loaded yet.
+      native: !isByok, model: isByok ? undefined : model,
     };
     // BYOK labels carry the effort suffix ('… High'); the model id is the
     // stable name basis so every effort variant lands on the same card.
@@ -267,7 +274,7 @@ function groupCards(models, state) {
     const card = cards.get(key);
     if (!card.families.has(familyUid)) {
       card.families.set(familyUid, { providerName, vendor: vendorOf(model, byokEntry), variants: [], familyLabel: '',
-        byok: uid.startsWith('dmp-'), providerId: byokEntry?.providerId || null, modelId: byokEntry?.modelId || null });
+        byok: isByok, providerId: byokEntry?.providerId || null, modelId: byokEntry?.modelId || null });
     }
     const family = card.families.get(familyUid);
     if (providerName && !family.providerName) family.providerName = providerName;
@@ -335,7 +342,8 @@ function groupFusion(candidates, nativeIndex) {
       card.familyLabel = base;
     }
     card.variants.push({ ref, uid: ref.uid, label: candidate.label, effort, effortOrder, toggles,
-      disabled: false, isDefault: ref.kind === 'byok' ? candidate.effort == null : nativeEntry?.isDefaultModelInFamily === true });
+      disabled: false, isDefault: ref.kind === 'byok' ? candidate.effort == null : nativeEntry?.isDefaultModelInFamily === true,
+      native: ref.kind === 'native', model: ref.kind === 'native' ? nativeEntry : undefined });
   }
   for (const card of cards.values()) {
     card.variants.sort((a, b) => (a.effortOrder ?? 1e9) - (b.effortOrder ?? 1e9));
@@ -507,6 +515,44 @@ function pickFusionSlots(value, state, candidates, draft) {
   return { lead: prefill.lead || backup.lead, sidekick: prefill.sidekick || backup.sidekick };
 }
 
+// Persisted under LS_KEY.view: 'cards' renders this panel on trigger events,
+// 'classic' leaves them to Devin's own menu. Anything else falls back to
+// 'cards' — the picker stays fail-open to the enhanced UI.
+function viewMode(data) {
+  return data?.view === 'classic' ? 'classic' : 'cards';
+}
+
+// Panel capture-keydown skips fields (they type) and the classic view switch
+// (Enter/Space must activate the button, not pick the first card).
+function skipsPanelHotkeys(active) {
+  if (!active) return false;
+  if (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
+    || active.tagName === 'SELECT' || active.isContentEditable) return true;
+  if (active.classList?.contains?.('dmp-classic')) return true;
+  if (typeof active.closest === 'function' && active.closest('.dmp-classic')) return true;
+  return false;
+}
+
+// Devin's own billing tag: ask the picker host's getCostTag for the native
+// visibleModelConfigs entry — the same call the classic LocalModelPicker
+// makes. We never reimplement billing rules, guess multipliers, or scrape
+// React DOM text. Anything without a non-empty string label renders nothing.
+function costTagFor(located, model) {
+  const fn = located?.host?.getCostTag;
+  if (typeof fn !== 'function' || !model) return null;
+  let tag;
+  try { tag = fn(model); } catch { return null; }
+  const label = typeof tag?.label === 'string' && tag.label.trim() ? tag.label : '';
+  if (!label) return null;
+  return { label, tooltip: typeof tag.tooltip === 'string' && tag.tooltip ? tag.tooltip : undefined };
+}
+
+// The variant a card would pick right now: the live selection, else the
+// card's effort/toggle state, else the family default.
+function selectedVariant(family, cardState, live) {
+  return live || matchVariant(family, cardState?.effortOrder ?? null, cardState?.toggles) || defaultVariant(family);
+}
+
 const PICKER_ORIGIN = 'vscode-file://vscode-app';
 const API_BASE = 'http://127.0.0.1:39852';
 const LS_KEY = 'devin-model-picker:v1';
@@ -515,7 +561,7 @@ const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, ba
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
   underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
   validDraft, pickFusionSlots, hidesCard, sanitizePrefs, prefSets, appendNewKeys, arrangeCards, applyCardDrop, dropModeFromRatio,
-  moveCardKey, toggleKey, mergeSubsetOrder,
+  moveCardKey, toggleKey, mergeSubsetOrder, viewMode, skipsPanelHotkeys, costTagFor, selectedVariant,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
 if (typeof module === 'object' && module.exports) { module.exports = exportsMap; return; }
 
@@ -565,6 +611,16 @@ const CSS = `
 .dmp-var{font-size:.68em;font-weight:500;color:var(--dmp-muted);margin-left:4px}
 .dmp-sub{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dmp-muted)}
 .dmp-sub-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dmp-cost{font-size:9px;color:var(--dmp-muted);border:1px solid currentColor;border-radius:4px;padding:0 3px}
+.dmp-cost.dmp-tagfree{color:#16a34a}
+.dmp-classic{flex:none;border:1px solid var(--dmp-border);border-radius:7px;background:transparent;
+ color:var(--dmp-muted);font-size:11px;padding:4px 9px;cursor:pointer;white-space:nowrap}
+.dmp-classic:hover{color:var(--dmp-fg);border-color:var(--dmp-muted)}
+.dmp-native-switch{flex:none;margin-left:4px;border:1px solid rgba(127,127,127,.4);border-radius:6px;
+ background:transparent;color:inherit;opacity:.55;font-size:10px;line-height:1.6;padding:0 5px;
+ cursor:pointer;font-family:inherit}
+.dmp-native-switch:hover,.dmp-native-switch:focus-visible{opacity:1}
+.dmp-native-switch:focus-visible{outline:1px solid currentColor;outline-offset:1px}
 .dmp-eff{display:flex;gap:3px;margin-top:auto}
 .dmp-eff button{flex:1;border:1px solid var(--dmp-border);border-radius:6px;background:transparent;
  color:var(--dmp-muted);font-size:10px;padding:2px 0;cursor:pointer;min-width:0;
@@ -678,6 +734,15 @@ function el(tag, className, text) {
   return node;
 }
 
+// One quiet chip in the card's top row — the label is Devin's own tag text;
+// the tooltip explains the source when the tag carries none of its own.
+function appendCostTag(node, tag, free) {
+  const freeTag = free === true || /free|免费/i.test(tag.label);
+  const chip = el('span', 'dmp-cost' + (freeTag ? ' dmp-tagfree' : ''), tag.label);
+  chip.title = tag.tooltip || 'Devin 原生计费标签';
+  node.appendChild(chip);
+}
+
 // React fiber plumbing -------------------------------------------------------
 function propKey(node, prefix) {
   for (const key of Object.keys(node)) if (key.startsWith(prefix)) return key;
@@ -692,6 +757,12 @@ function fiberOf(node) {
   }
   return fiber || null;
 }
+// The LocalModelPicker root props shape (value + onSelect + modelConfig) —
+// shared by locate() and the portal-menu owner check.
+function isRootProps(props) {
+  return !!props && typeof props === 'object' && typeof props.onSelect === 'function' &&
+    ('value' in props || 'modelConfig' in props) && props.modelConfig !== undefined;
+}
 // Walk .return to find the host (onModelSelect + visibleModelConfigs) and the
 // LocalModelPicker root (value + onSelect). Matched by prop names only.
 function locate(fiber) {
@@ -700,8 +771,7 @@ function locate(fiber) {
     const props = current.memoizedProps;
     if (props && typeof props === 'object') {
       if (!host && Array.isArray(props.visibleModelConfigs) && typeof props.onModelSelect === 'function') host = props;
-      if (!rootPicker && typeof props.onSelect === 'function' &&
-          ('value' in props || 'modelConfig' in props) && props.modelConfig !== undefined) rootPicker = props;
+      if (!rootPicker && isRootProps(props)) rootPicker = props;
     }
     current = current.return;
   }
@@ -774,6 +844,20 @@ function activePrefs() {
   return panelState?.prefSets?.[panelState.mode === 'fusion' ? panelState.activeSlot : 'single'];
 }
 function prefAlias(key) { return activePrefs()?.aliases?.[key] || null; }
+
+// View preference — cached in `view`, persisted under LS_KEY.view. 'classic'
+// means every trigger event goes to Devin's own menu; Alt+click is the
+// one-shot escape that never touches this.
+let view = 'cards';
+try { view = viewMode(JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch {}
+function setView(next) {
+  view = next === 'classic' ? 'classic' : 'cards';
+  try {
+    const data = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    data.view = view;
+    localStorage.setItem(LS_KEY, JSON.stringify(data));
+  } catch {}
+}
 
 // Panel ----------------------------------------------------------------------
 let styleNode = null;
@@ -1394,12 +1478,18 @@ function buildCard(card, index, located) {
     for (const key of family.toggles || []) cardState.toggles[key] = live.toggles?.[key] ?? 0;
   }
 
+  // Native billing tag for the variant the card would pick — the host's own
+  // getCostTag word, shown instead of the generic free badge.
+  const costVariant = selectedVariant(family, cardState, live);
+  const costTag = costVariant?.native === true ? costTagFor(located, costVariant.model) : null;
+
   const top = el('div', 'dmp-top');
   top.appendChild(el('span', 'dmp-idx', String(index + 1).padStart(2, '0')));
   const dot = el('span', 'dmp-dot');
   dot.style.background = VENDORS[family.vendor] || VENDORS.other;
   top.appendChild(dot);
-  if (family.free) top.appendChild(el('span', 'dmp-free', '免费'));
+  if (costTag) appendCostTag(top, costTag, costVariant.free);
+  else if (family.free) top.appendChild(el('span', 'dmp-free', '免费'));
   if (card.favorite) top.appendChild(el('span', 'dmp-star', '★'));
   const chip = el('button', 'dmp-prov', family.providerName || 'Devin');
   chip.title = card.families.length > 1 ? '切换供应商' : '';
@@ -1493,11 +1583,29 @@ function buildFusionCard(card, index, located, state) {
   const selectedRefs = [slots.lead, slots.sidekick].filter(Boolean).map(ref => ref.kind + ':' + ref.uid);
   if (blocked) { node.classList.add('dmp-off'); node.title = '两个槽位不能使用同一模型'; }
 
+  const fkey = card.cardKey;
+  if (!panelState.cardStates.has(fkey)) {
+    const pre = card.variants.find(variant => selectedRefs.includes(variant.ref.kind + ':' + variant.ref.uid)) || defaultVariant(card);
+    panelState.cardStates.set(fkey, {
+      effortOrder: pre?.effortOrder ?? card.cells[0]?.order ?? null,
+      toggles: Object.fromEntries((card.toggles || []).map(tk => [tk, pre?.toggles?.[tk] ?? 0])),
+    });
+  }
+  const cardState = panelState.cardStates.get(fkey);
+  const held = card.variants.find(variant => selectedRefs.includes(variant.ref.kind + ':' + variant.ref.uid));
+  if (held) {
+    cardState.effortOrder = held.effortOrder ?? cardState.effortOrder;
+    for (const key of card.toggles || []) cardState.toggles[key] = held.toggles?.[key] ?? 0;
+  }
+  const costVariant = selectedVariant(card, cardState, held);
+  const costTag = costVariant?.native === true ? costTagFor(located, costVariant.model) : null;
+
   const top = el('div', 'dmp-top');
   top.appendChild(el('span', 'dmp-idx', String(index + 1).padStart(2, '0')));
   const dot = el('span', 'dmp-dot');
   dot.style.background = VENDORS[card.vendor] || VENDORS.other;
   top.appendChild(dot);
+  if (costTag) appendCostTag(top, costTag, costVariant.free);
   if (card.favorite) top.appendChild(el('span', 'dmp-star', '★'));
   top.appendChild(el('span', 'dmp-prov', card.providerName || 'Devin'));
   node.appendChild(top);
@@ -1517,20 +1625,6 @@ function buildFusionCard(card, index, located, state) {
   sub.appendChild(el('span', 'dmp-sub-txt', (card.familyLabel || card.name) + ' · ' + (card.providerName || 'Devin')));
   node.appendChild(sub);
 
-  const fkey = card.cardKey;
-  if (!panelState.cardStates.has(fkey)) {
-    const pre = card.variants.find(variant => selectedRefs.includes(variant.ref.kind + ':' + variant.ref.uid)) || defaultVariant(card);
-    panelState.cardStates.set(fkey, {
-      effortOrder: pre?.effortOrder ?? card.cells[0]?.order ?? null,
-      toggles: Object.fromEntries((card.toggles || []).map(tk => [tk, pre?.toggles?.[tk] ?? 0])),
-    });
-  }
-  const cardState = panelState.cardStates.get(fkey);
-  const held = card.variants.find(variant => selectedRefs.includes(variant.ref.kind + ':' + variant.ref.uid));
-  if (held) {
-    cardState.effortOrder = held.effortOrder ?? cardState.effortOrder;
-    for (const key of card.toggles || []) cardState.toggles[key] = held.toggles?.[key] ?? 0;
-  }
   const fill = variant => {
     if (!variant || blocked) return;
     slots[panelState.activeSlot] = variant.ref;
@@ -1790,6 +1884,13 @@ function openPanel(trigger, located) {
   filter.placeholder = '输入以筛选';
   filter.addEventListener('input', () => { panelState.filter = filter.value; rerenderGrid(); });
   toolbar.appendChild(filter);
+  const classicBtn = el('button', 'dmp-classic', '经典选择器');
+  classicBtn.title = '切换到 Devin 原生选择器（Alt+点击）';
+  classicBtn.addEventListener('click', event => {
+    event.stopPropagation();
+    openClassic(panelState?.trigger || trigger);
+  });
+  toolbar.appendChild(classicBtn);
   panel.appendChild(toolbar);
   const slotRow = el('div', 'dmp-slots');
   slotRow.appendChild(slotChip('lead', '主模型'));
@@ -1840,8 +1941,7 @@ function openPanel(trigger, located) {
     const active = document.activeElement;
     if (panelState.menu) return;
     if (panelState.mode === 'providers') return;
-    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
-      || active.tagName === 'SELECT' || active.isContentEditable)) return;
+    if (skipsPanelHotkeys(active)) return;
     if (event.key === 'Enter') {
       const first = panel.querySelector('.dmp-card:not(.dmp-off):not(.dmp-add)');
       if (first) first.click();
@@ -1877,14 +1977,126 @@ function togglePanel(trigger) {
   openPanel(trigger, located);
 }
 
+// --- Classic view: back-and-forth -------------------------------------------
+
+// The native menu's public open callback: the located host's onOpenChange
+// first, then the first onOpenChange up the trigger's fiber .return chain,
+// then the located root's, then the one recorded at bind time. Props are only
+// ever read, never written.
+function openChangeFor(trigger, located) {
+  if (typeof located?.host?.onOpenChange === 'function') return located.host.onOpenChange;
+  const fiber = trigger && fiberOf(trigger);
+  let current = fiber?.return, depth = 0;
+  while (current && depth++ < 6) {
+    const fn = current.memoizedProps?.onOpenChange;
+    if (typeof fn === 'function') return fn;
+    current = current.return;
+  }
+  return located?.root?.onOpenChange || trigger?.__dmpOpenChange || null;
+}
+
+// Switch persistently to Devin's own menu, then open it through the picker's
+// public onOpenChange. Only when no callback can be located do we replay the
+// Alt-flagged pointerdown→mousedown→click sequence a real click produces —
+// our capture layer lets Alt events straight through to React.
+function openClassic(trigger) {
+  const located = trigger?.isConnected ? locateTrigger(trigger) : null;
+  setView('classic');
+  closePanel();
+  if (!trigger?.isConnected) return;
+  const opener = openChangeFor(trigger, located);
+  if (opener) { try { opener(true); } catch {} return; }
+  const rect = trigger.getBoundingClientRect();
+  const init = { bubbles: true, cancelable: true, altKey: true, button: 0, view: window,
+    clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+  try {
+    if (typeof PointerEvent === 'function') {
+      trigger.dispatchEvent(new PointerEvent('pointerdown', { ...init, buttons: 1, pointerType: 'mouse', isPrimary: true }));
+    }
+  } catch {}
+  try { trigger.dispatchEvent(new MouseEvent('mousedown', { ...init, buttons: 1 })); } catch {}
+  try { trigger.dispatchEvent(new MouseEvent('click', init)); } catch {}
+}
+
+// The adjacent "卡片" entry — always present next to a bound trigger, and also
+// injected at the top of a proven model menu (portal fallback). Click restores
+// the cards view and opens the panel in the same gesture.
+function nativeSwitch(trigger) {
+  const btn = el('button', 'dmp-native-switch', '卡片');
+  btn.type = 'button';
+  btn.title = '卡片选择器';
+  btn.setAttribute('aria-label', '卡片选择器');
+  btn.setAttribute('data-dmp-native-switch', '');
+  btn.__dmpTrigger = trigger;
+  btn.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    backToCards(trigger);
+  });
+  return btn;
+}
+
+function backToCards(trigger) {
+  setView('cards');
+  const located = trigger?.isConnected ? locateTrigger(trigger) : null;
+  const opener = openChangeFor(trigger, located);
+  if (opener) { try { opener(false); } catch {} }
+  else { try { located?.root?.onClose?.(); } catch {} }
+  if (trigger && located) openPanel(trigger, located);
+}
+
+// A portal-mounted [role=menu] belongs to a bound trigger only when its fiber
+// chain carries that trigger's very picker root props — the same render shares
+// the props object, so reference equality is the proof. Unrelated menus
+// (context menus, other dropdowns) never match and never get the switch.
+function menuOwner(fiber) {
+  const roots = [];
+  let current = fiber, depth = 0;
+  while (current && depth++ < 40) {
+    if (isRootProps(current.memoizedProps)) roots.push(current.memoizedProps);
+    current = current.return;
+  }
+  if (!roots.length) return null;
+  for (const button of document.querySelectorAll('button[aria-haspopup="menu"][data-dmp-bound]')) {
+    const located = locateTrigger(button);
+    if (located?.root && roots.includes(located.root)) return button;
+  }
+  return null;
+}
+
+function bindMenus() {
+  for (const menu of document.querySelectorAll('[role="menu"]')) {
+    if (menu.querySelector('[data-dmp-native-switch]')) continue;
+    const fiber = fiberOf(menu);
+    if (!fiber) continue;
+    const owner = menuOwner(fiber);
+    if (!owner) continue;
+    menu.insertBefore(nativeSwitch(owner), menu.firstChild);
+  }
+}
+
 // Trigger binding ------------------------------------------------------------
 function bind() {
+  // Switches whose trigger React replaced are removed first so a fresh
+  // trigger always gets its own adjacent entry.
+  for (const sw of document.querySelectorAll('[data-dmp-native-switch]')) {
+    const owner = sw.__dmpTrigger;
+    if (owner && !owner.isConnected) sw.remove();
+  }
   const buttons = document.querySelectorAll('button[aria-haspopup="menu"]:not([data-dmp-bound])');
   for (const button of buttons) {
     const fiber = fiberOf(button);
-    if (!fiber || !locate(fiber)) continue;
+    if (!fiber) continue;
+    const located = locate(fiber);
+    if (!located) continue;
     button.setAttribute('data-dmp-bound', '');
+    button.__dmpOpenChange = openChangeFor(button, located) || undefined;
+    const near = sibling => sibling?.hasAttribute?.('data-dmp-native-switch');
+    if (!near(button.previousElementSibling) && !near(button.nextElementSibling)) {
+      button.parentElement?.insertBefore(nativeSwitch(button), button.nextSibling);
+    }
   }
+  bindMenus();
 }
 let bindScheduled = false;
 function scheduleBind() {
@@ -1895,9 +2107,13 @@ function scheduleBind() {
 
 for (const type of ['pointerdown', 'mousedown', 'click']) {
   window.addEventListener(type, event => {
+    // Our own switch entries must be handled before the trigger check —
+    // their own listeners own the event.
+    if (event.target?.closest?.('[data-dmp-native-switch]')) return;
     const button = event.target && event.target.closest ? event.target.closest('button[aria-haspopup="menu"][data-dmp-bound]') : null;
     if (!button) return;
     if (event.altKey) return; // escape hatch → native menu
+    if (view === 'classic') return; // classic view → native menu
     if (type === 'click') {
       if (!locateTrigger(button)) return; // host vanished → native
       event.preventDefault();
@@ -1910,14 +2126,17 @@ for (const type of ['pointerdown', 'mousedown', 'click']) {
 }
 window.addEventListener('keydown', event => {
   if (!['Enter', ' ', 'ArrowDown'].includes(event.key)) return;
+  if (event.target?.closest?.('[data-dmp-native-switch]')) return;
   const button = event.target && event.target.closest ? event.target.closest('button[aria-haspopup="menu"][data-dmp-bound]') : null;
   if (!button || event.altKey) return;
+  if (view === 'classic') return;
   if (!locateTrigger(button)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   togglePanel(button);
 }, true);
 
+ensureStyle();
 observer = new MutationObserver(scheduleBind);
 observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
 const themeObserver = new MutationObserver(() => {
