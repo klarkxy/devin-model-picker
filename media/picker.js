@@ -582,7 +582,6 @@ const CSS = `
  font-size:12px;padding:6px 14px;cursor:pointer}
 .dmp-apply:disabled{opacity:.45;cursor:default}
 .dmp-err{font-size:11px;color:#ef4444}
-.dmp-card.dmp-hid{opacity:.5}
 .dmp-card[data-drop="before"]{box-shadow:-3px 0 0 0 var(--dmp-sel)}
 .dmp-card[data-drop="after"]{box-shadow:3px 0 0 0 var(--dmp-sel)}
 .dmp-card[data-drop="swap"]{outline:2px dashed var(--dmp-sel);outline-offset:-2px}
@@ -596,8 +595,6 @@ const CSS = `
  text-align:left;font-size:12px;padding:5px 10px;border-radius:6px;cursor:pointer}
 .dmp-menu button:hover{background:var(--dmp-card-hover)}
 .dmp-menu button.dmp-danger{color:#ef4444}
-.dmp-showhidden{border:1px solid var(--dmp-border);border-radius:6px;background:transparent;
- color:var(--dmp-muted);font-size:11px;padding:2px 8px;cursor:pointer}
 .dmp-status{font-size:11px;color:var(--dmp-muted)}
 .dmp-btn{white-space:nowrap;flex:none;border:0;border-radius:7px;background:var(--dmp-sel);color:#fff;font-size:12px;
  padding:6px 12px;cursor:pointer}
@@ -884,28 +881,6 @@ function cardMenuItems(card, resolveUid) {
   const uid = resolveUid();
   if (uid) items.push({ label: '复制模型 ID', action: () => {
     try { navigator.clipboard?.writeText(uid)?.catch?.(() => {}); } catch {} } });
-  items.push({ label: card.hidden ? '取消隐藏' : '隐藏', action: () => {
-    // The key hides only this card's Devin family; BYOK families are hidden by
-    // switching their models off, so a same-named model elsewhere is untouched.
-    const hiding = !card.hidden;
-    const hasNative = Array.isArray(card.families) ? card.families.some(family => !family.byok) : !card.byok;
-    const byokFams = Array.isArray(card.families)
-      ? card.families.filter(family => family.byok && family.providerId)
-      : (card.byok && card.providerId ? [card] : []);
-    if (!hiding) prefs.hidden = prefs.hidden.filter(entry => entry !== key);
-    else if (hasNative && !prefs.hidden.includes(key)) prefs.hidden = [...prefs.hidden, key];
-    savePrefs(); rerenderGrid();
-    if (hiding && byokFams.length) {
-      for (const family of byokFams) {
-        pickerPost('/picker/models/enabled', { providerId: family.providerId,
-          modelIds: [family.modelId], enabled: false }).catch(() => {});
-      }
-      panelState.status = '已隐藏，正在刷新…';
-      renderFoot();
-      pollForRefresh();
-      refreshProviders();
-    }
-  } });
   const byokInfo = card.providerId ? card
     : (card.families || []).find(family => family.providerId) || null;
   if (byokInfo) {
@@ -1048,6 +1023,10 @@ function renderProviders() {
   if (!panel || !panelState || panelState.mode !== 'providers') return;
   const tab = panel.querySelector('.dmp-provtab');
   if (!tab) return;
+  // Every toggle re-renders the tab; keep both lists where the user left them
+  // (the model list only while the same provider stays selected).
+  const keepModels = panelState.provRendered === panelState.provSel ? tab.querySelector('.dmp-mlist')?.scrollTop || 0 : 0;
+  const keepProviders = tab.querySelector('.dmp-plist')?.scrollTop || 0;
   tab.replaceChildren();
   const list = el('div', 'dmp-plist');
   const detail = el('div', 'dmp-pdetail');
@@ -1087,6 +1066,10 @@ function renderProviders() {
     if (!provider) { panelState.provSel = 'devin'; renderProviders(); return; }
     renderProvDetail(detail, provider);
   }
+  panelState.provRendered = sel;
+  list.scrollTop = keepProviders;
+  const models = detail.querySelector('.dmp-mlist');
+  if (models) models.scrollTop = keepModels;
 }
 
 // Shared model-switch list: search, bulk show/hide of filtered rows, count and
@@ -1375,7 +1358,6 @@ function buildCard(card, index, located) {
   const enabledVariants = family.variants.filter(variant => !variant.disabled);
   const cardDisabled = enabledVariants.length === 0;
   if (cardDisabled) { node.classList.add('dmp-off'); node.title = family.variants[0]?.disabledReason || ''; }
-  if (card.hidden) node.classList.add('dmp-hid');
   const live = family.variants.find(variant => variant.uid === value);
   const cardState = cardStateFor(card, family);
   if (live) {
@@ -1482,7 +1464,6 @@ function buildFusionCard(card, index, located, state) {
   const blocked = other && cardKeys.includes(otherKey);
   const selectedRefs = [slots.lead, slots.sidekick].filter(Boolean).map(ref => ref.kind + ':' + ref.uid);
   if (blocked) { node.classList.add('dmp-off'); node.title = '两个槽位不能使用同一模型'; }
-  if (card.hidden) node.classList.add('dmp-hid');
 
   const top = el('div', 'dmp-top');
   top.appendChild(el('span', 'dmp-idx', String(index + 1).padStart(2, '0')));
@@ -1606,8 +1587,7 @@ function rerenderGrid() {
     const cards = groupFusion(lastState.fusionCandidates?.[active] || [], nativeIndex);
     const all = arrangeCards(cards, panelState.prefs, true);
     panelState.fullKeys = all.map(card => card.prefKey);
-    panelState.hiddenCount = all.filter(card => card.hidden).length;
-    const arranged = panelState.showHidden ? all : all.filter(card => !card.hidden);
+    const arranged = all.filter(card => !card.hidden);
     const rendered = [];
     let shown = 0;
     arranged.forEach(card => {
@@ -1631,8 +1611,7 @@ function rerenderGrid() {
   const hiddenSet = new Set(panelState.prefs.hidden);
   const all = arrangeCards(cards, panelState.prefs, true);
   panelState.fullKeys = all.map(card => card.prefKey);
-  panelState.hiddenCount = all.filter(card => card.hidden).length;
-  const arranged = panelState.showHidden ? all : all.filter(card => !card.hidden);
+  const arranged = all.filter(card => !card.hidden);
   const rendered = [];
   let shown = 0;
   arranged.forEach(card => {
@@ -1650,22 +1629,11 @@ function rerenderGrid() {
   renderFoot();
 }
 
-// Footer: hidden-card toggle + status/hint, then the fusion apply button.
+// Footer: status/hint, then the fusion apply button.
 function renderFoot() {
   const foot = panel?.querySelector('.dmp-foot');
   if (!foot || !panelState) return;
   while (foot.firstChild) foot.removeChild(foot.firstChild);
-  const hiddenCount = panelState.hiddenCount || 0;
-  if (hiddenCount > 0) {
-    const btn = el('button', 'dmp-showhidden',
-      (panelState.showHidden ? '收起已隐藏' : '显示已隐藏') + ' (' + hiddenCount + ')');
-    btn.addEventListener('click', event => {
-      event.stopPropagation();
-      panelState.showHidden = !panelState.showHidden;
-      rerenderGrid();
-    });
-    foot.appendChild(btn);
-  }
   foot.appendChild(el('span', panelState.status ? 'dmp-status' : '',
     panelState.status || '输入即可筛选 · Alt+点击打开原生菜单'));
   if (panelState.mode === 'fusion') renderFusionFooter();
@@ -1745,7 +1713,7 @@ function openPanel(trigger, located) {
   panelState = { trigger, located, mode: startsFusion ? 'fusion' : 'single', filter: '',
     value, activeSlot: 'lead', cardStates: new Map(),
     fusionSlots: { lead: null, sidekick: null },
-    prefs: loadPrefs(), showHidden: false, menu: null, editing: null,
+    prefs: loadPrefs(), menu: null, editing: null,
     dragIndex: null, suppressClick: false, status: '',
     providers: [], provSel: 'devin', provSearch: '', provOnlyShown: false,
     provEdit: null, provConfirmDelete: false, provError: '' };
@@ -1830,7 +1798,7 @@ function openPanel(trigger, located) {
     if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
       || active.tagName === 'SELECT' || active.isContentEditable)) return;
     if (event.key === 'Enter') {
-      const first = panel.querySelector('.dmp-card:not(.dmp-off):not(.dmp-add):not(.dmp-hid)');
+      const first = panel.querySelector('.dmp-card:not(.dmp-off):not(.dmp-add)');
       if (first) first.click();
     } else if (event.key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey) {
       filter.focus();
