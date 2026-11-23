@@ -894,7 +894,7 @@ function setView(next) {
     data.view = view;
     localStorage.setItem(LS_KEY, JSON.stringify(data));
   } catch {}
-  scheduleBind(); // the adjacent switch appears/disappears with the view
+  bind(); // sync: the adjacent switch must be gone before backToCards positions the panel
 }
 
 // Panel ----------------------------------------------------------------------
