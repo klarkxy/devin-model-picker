@@ -88,7 +88,8 @@ Switch to the **Fusion** tab to build your own **Lead (`主模型`) + Sidekick (
 1. Click the **主模型** (Lead) or **辅助模型** (Sidekick) slot header at the top to choose which slot you are filling.
 2. Click any model card (and pick its effort level or `Fast` toggle). Selecting a Lead model automatically advances focus to the Sidekick slot if it is empty.
 3. Lead and Sidekick cannot use the exact same underlying model (cards already assigned to the other slot are dimmed). Assigned cards display **`主模型`** or **`辅助`** badges in their top row.
-4. Click **`使用此组合`** (Use This Pair) in the bottom-right corner to activate the combination.
+4. When the Lead is a native Devin model, sidekick cards show an **`官方`** / **`非官方`** (official / unofficial) pairing tag, and unofficial pairs get a warning in the footer — nothing is blocked or reordered. Once applied, an official Devin Fusion pair shows its concrete models (e.g. `Claude Opus 5.5 High + SWE-2 High`) on the composer's model button instead of just `Fusion`.
+5. Click **`使用此组合`** (Use This Pair) in the bottom-right corner to activate the combination.
 
 > [!NOTE]
 > Newly connected or newly enabled BYOK models are immediately available in new chat sessions; already-open CLI sessions may take up to ~60 seconds to reflect newly added model IDs due to Devin CLI's session option cache.

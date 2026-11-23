@@ -6,7 +6,8 @@ const path = require('node:path');
 const picker = require('../media/picker.js');
 
 test('picker.js exports pure helpers under node', () => {
-  for (const key of ['cardName', 'effortLabel', 'filterNorm', 'groupCards', 'groupFusion', 'prefillFusion', 'defaultVariant']) {
+  for (const key of ['cardName', 'effortLabel', 'filterNorm', 'groupCards', 'groupFusion', 'prefillFusion',
+    'defaultVariant', 'pairingTag', 'fusionPairLabel']) {
     assert.equal(typeof picker[key], 'function', key);
   }
 });
@@ -141,6 +142,32 @@ test('prefillFusion parses dmp slots and official fusion uids', () => {
   assert.equal(missing.lead, null);
   assert.deepEqual(missing.sidekick, { kind: 'native', uid: 'swe-2-high' });
   assert.equal(picker.prefillFusion('swe-2-high', state, candidates).startedInFusion, false);
+});
+
+test('pairingTag flags official native pairs and unofficial mixes', () => {
+  const side = { ref: { kind: 'native', uid: 'swe-2-high' }, officialLeads: ['claude-opus-5-5-high'] };
+  assert.equal(picker.pairingTag({ kind: 'byok', uid: 'dmp-1' }, side), null, 'BYOK lead → no tag');
+  assert.equal(picker.pairingTag(null, side), null, 'no lead → no tag');
+  assert.equal(picker.pairingTag({ kind: 'native', uid: 'claude-opus-5-5-high' }, null), null, 'no candidate → no tag');
+  assert.equal(picker.pairingTag({ kind: 'native', uid: 'claude-opus-5-5-high' }, side), 'official');
+  assert.equal(picker.pairingTag({ kind: 'native', uid: 'gpt-6-1' }, side), 'unofficial',
+    'native lead outside officialLeads');
+  assert.equal(picker.pairingTag({ kind: 'native', uid: 'claude-opus-5-5-high' },
+    { ref: { kind: 'byok', uid: 'dmp-2' } }), 'unofficial', 'native lead + BYOK sidekick');
+});
+
+test('fusionPairLabel extracts the concrete pair from official fusion labels', () => {
+  assert.equal(picker.fusionPairLabel(
+    { familyUid: 'fusion', label: 'Fusion (Claude Opus 5.5 Medium + SWE-2 Medium)' }),
+    'Claude Opus 5.5 Medium + SWE-2 Medium');
+  assert.equal(picker.fusionPairLabel(
+    { familyUid: 'fusion', label: 'Fusion (Claude Opus 5.5 Medium Fast + SWE-2 Medium)' }),
+    'Claude Opus 5.5 Medium Fast + SWE-2 Medium', 'Fast stays inside the parentheses');
+  assert.equal(picker.fusionPairLabel({ familyUid: 'other', label: 'Fusion (A + B)' }), null,
+    'non-fusion family → null');
+  assert.equal(picker.fusionPairLabel({ familyUid: 'fusion', label: 'Fusion' }), null,
+    'label without parentheses → null');
+  assert.equal(picker.fusionPairLabel(null), null);
 });
 
 test('filterNorm ignores case, dashes, dots and spaces so gpt5 finds GPT-5', () => {

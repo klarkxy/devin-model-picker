@@ -2,7 +2,7 @@
   "name": "devin-model-picker",
   "displayName": "Devin Model Picker",
   "description": "Import OpenAI- and Anthropic-compatible BYOK models into Devin and pick Fusion lead/sidekick pairs from the model card UI.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "klarkxy",
   "license": "MIT",
   "engines": {
