@@ -593,3 +593,40 @@ test('groupFusion assigns accurate vendor keys instead of hardcoding windsurf/ot
   assert.equal(byName['GLM-5.3'], 'zai');
   assert.equal(byName['SWE-2'], 'windsurf');
 });
+
+test('fusion slot text strips a BYOK effort suffix before appending the compact label', () => {
+  const ref = { kind: 'byok', uid: 'dmp-p-reasoner-high' };
+  assert.equal(picker.fusionSlotText(
+    { familyLabel: 'DeepSeek Reasoner High', label: 'Magpie · DeepSeek Reasoner High', effort: 'high' }, ref),
+    'DeepSeek Reasoner H');
+  assert.equal(picker.fusionSlotText(
+    { familyLabel: 'DeepSeek Reasoner', effort: 'high' }, ref),
+    'DeepSeek Reasoner H');
+  assert.equal(picker.fusionSlotText(
+    { label: 'Magpie · DeepSeek Reasoner High', effort: 'high' }, ref),
+    'DeepSeek Reasoner H', 'label fallback also strips High before appending H');
+  assert.equal(picker.fusionSlotText(
+    { familyLabel: 'Claude Opus 5.5', effort: 'High' }, { kind: 'native', uid: 'claude-opus-5-5-high' }),
+    'Opus 5.5 H');
+  const source = fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8');
+  const chip = source.slice(source.indexOf('function slotChip'), source.indexOf('function rerenderGrid'));
+  assert.ok(chip.includes('fusionSlotText'), 'slot chips use fusionSlotText');
+  assert.ok(!chip.includes('parsed.name'), 'slot chips no longer compose cardName + effort inline');
+});
+
+test('clipboardStatus reports success only after writeText resolves', async () => {
+  const ok = await picker.clipboardStatus(async uid => { assert.equal(uid, 'dmp-1'); }, 'dmp-1');
+  assert.deepEqual(ok, { ok: true, text: '已复制模型 ID：dmp-1' });
+  const missing = await picker.clipboardStatus(undefined, 'dmp-1');
+  assert.equal(missing.ok, false);
+  assert.equal(missing.text, '复制失败');
+  const rejected = await picker.clipboardStatus(async () => { throw new Error('denied'); }, 'dmp-1');
+  assert.equal(rejected.ok, false);
+  const syncThrow = await picker.clipboardStatus(() => { throw new Error('nope'); }, 'dmp-1');
+  assert.equal(syncThrow.ok, false);
+  const source = fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8');
+  const action = source.slice(source.indexOf("label: '复制模型 ID'"), source.indexOf("label: '管理供应商"));
+  assert.ok(action.includes('clipboardStatus'));
+  assert.ok(action.includes('.then'), 'toast waits for clipboardStatus');
+  assert.ok(!action.includes("?.catch?.(() => {})"), 'failed writes are no longer swallowed before the toast');
+});

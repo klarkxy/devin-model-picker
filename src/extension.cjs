@@ -378,10 +378,13 @@ async function activate(context) {
   };
   // Disabling in the extension manager restarts the extension host and never runs
   // the disable command; without this the native CLI keeps pointing at a runtime
-  // that no longer starts. A plain reload or quit keeps the shared settings.
+  // that no longer starts. A plain reload or quit keeps the shared settings and
+  // the workbench injection. Panel disable must also remove the injection so the
+  // card picker does not remain after the backend is gone.
   restoreOnHostDisable = async () => {
     if (!isHostDisabled({ storageRoot: root })) return;
     await restoreOwnedSettings();
+    try { removeInjection({ appRoot: vscode.env.appRoot, log }); } catch { log('injection-remove-failed'); }
     log('host-disabled-settings-restored');
   };
   context.subscriptions.push(vscode.commands.registerCommand('devinModelPicker.disable', run(disable)));

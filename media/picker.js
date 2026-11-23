@@ -84,9 +84,27 @@ function cardName(label) {
 
 const EFFORT_SHORT = { none: 'Off', off: 'Off', minimal: 'Min', low: 'L',
   medium: 'M', high: 'H', xhigh: 'xH', max: 'Max', ultra: 'U' };
+const EFFORT_NAMES = { none: 'None', off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium',
+  high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra' };
 // Only known effort words get compact labels; family dimension names like
 // Flash/Lightning keep their full word (cells render at 10px).
 const effortLabel = effort => effort == null ? '' : (EFFORT_SHORT[String(effort).toLowerCase()] ?? String(effort));
+
+function stripEffortSuffix(basis, effort) {
+  const text = String(basis || '');
+  if (!text || effort == null || effort === '') return text;
+  const raw = String(effort);
+  const lower = raw.toLowerCase();
+  const suffixes = [];
+  for (const suffix of [EFFORT_NAMES[lower], EFFORT_SHORT[lower], raw]) {
+    if (suffix && !suffixes.includes(suffix)) suffixes.push(suffix);
+  }
+  suffixes.sort((a, b) => b.length - a.length);
+  for (const suffix of suffixes) {
+    if (text.endsWith(' ' + suffix)) return text.slice(0, -(suffix.length + 1));
+  }
+  return text;
+}
 
 const filterNorm = text => String(text || '').toLowerCase().replace(/[-._\s/]+/g, '');
 const filterMatch = (needle, fields) => {
@@ -135,6 +153,24 @@ function stripProvider(label) {
   const raw = String(label || '');
   const index = raw.indexOf(' · ');
   return index >= 0 ? raw.slice(index + 3) : raw;
+}
+
+function fusionSlotText(cand, ref) {
+  let basis = cand?.familyLabel || '';
+  if (!basis && cand?.label) basis = stripProvider(cand.label);
+  basis = stripEffortSuffix(basis, cand?.effort);
+  const parsed = cardName(basis || ref?.uid || '');
+  const eff = cand?.effort != null ? effortLabel(cand.effort) : '';
+  return [parsed.name, parsed.version, parsed.variant, eff].filter(Boolean).join(' ') || ref?.uid || '';
+}
+
+function clipboardStatus(writeText, uid) {
+  const fail = { ok: false, text: '复制失败' };
+  if (typeof writeText !== 'function' || uid == null || uid === '') return Promise.resolve(fail);
+  return Promise.resolve().then(() => writeText(uid)).then(
+    () => ({ ok: true, text: '已复制模型 ID：' + uid }),
+    () => fail
+  );
 }
 
 const HIDDEN_DISPLAY = new Set(['model-router', 'invisible', 'arena']);
@@ -598,6 +634,7 @@ const LS_KEY = 'devin-model-picker:v1';
 const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, baseLabel,
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
   underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
+  stripEffortSuffix, fusionSlotText, clipboardStatus,
   validDraft, pickFusionSlots, hidesCard, sanitizePrefs, prefSets, appendNewKeys, arrangeCards, applyCardDrop, dropModeFromRatio,
   moveCardKey, toggleKey, mergeSubsetOrder, viewMode, skipsPanelHotkeys, costTagFor, selectedVariant, priceInfo,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
@@ -1039,17 +1076,18 @@ function cardMenuItems(card, resolveUid) {
     delete prefs.aliases[key]; savePrefs(); rerenderGrid(); } });
   const uid = resolveUid();
   if (uid) items.push({ label: '复制模型 ID', action: () => {
-    try { navigator.clipboard?.writeText(uid)?.catch?.(() => {}); } catch {}
-    if (!panelState) return;
-    const notice = '已复制模型 ID：' + uid;
-    panelState.status = notice;
-    renderFoot();
-    setTimeout(() => {
-      if (panelState && panelState.status === notice) {
-        panelState.status = '';
-        renderFoot();
-      }
-    }, 2000);
+    const write = navigator.clipboard?.writeText?.bind(navigator.clipboard);
+    void clipboardStatus(write, uid).then(result => {
+      if (!panelState) return;
+      panelState.status = result.text;
+      renderFoot();
+      setTimeout(() => {
+        if (panelState && panelState.status === result.text) {
+          panelState.status = '';
+          renderFoot();
+        }
+      }, 2000);
+    });
   } });
   const byokInfo = card.providerId ? card
     : (card.families || []).find(family => family.providerId) || null;
@@ -1787,12 +1825,6 @@ function slotChip(slot, label) {
   if (ref) {
     const cand = [...(lastState?.fusionCandidates?.leads || []), ...(lastState?.fusionCandidates?.sidekicks || [])]
       .find(item => item.ref.kind === ref.kind && item.ref.uid === ref.uid);
-    let basis = cand?.familyLabel || '';
-    if (!basis && cand?.label) {
-      basis = stripProvider(cand.label);
-      if (cand.effort && basis.endsWith(' ' + cand.effort)) basis = basis.slice(0, -cand.effort.length - 1);
-    }
-    const parsed = cardName(basis || ref.uid);
     const activeToggles = [];
     if (ref.kind === 'native') {
       const models = panelState?.located?.host?.visibleModelConfigs || [];
@@ -1815,8 +1847,7 @@ function slotChip(slot, label) {
         }
       }
     }
-    const eff = cand?.effort != null ? effortLabel(cand.effort) : '';
-    text = [parsed.name, parsed.version, parsed.variant, eff, ...activeToggles].filter(Boolean).join(' ') || ref.uid;
+    text = [fusionSlotText(cand, ref), ...activeToggles].filter(Boolean).join(' ') || ref.uid;
     chip.title = cand?.label || ref.uid;
   }
   chip.appendChild(el('span', '', text));

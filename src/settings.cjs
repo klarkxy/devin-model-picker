@@ -201,14 +201,18 @@ $('enabled').onchange = () => post('setEnabled', { enabled: $('enabled').checked
 $('f-url').oninput = previewUrl;
 $('f-format').onchange = previewUrl;
 for (const id of ['f-name', 'f-url', 'f-key']) {
-  $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('f-save').click(); } });
+  $(id).addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    $('f-save').click();
+  });
 }
 $('f-cancel').onclick = () => $('editor').close();
 $('f-save').onclick = () => post('saveProvider', { id: editing ? editing.id : undefined, name: $('f-name').value, baseUrl: $('f-url').value, apiKey: $('f-key').value || undefined, apiFormat: $('f-format').value });
 $('i-cancel').onclick = () => $('importer').close();
 $('i-search').oninput = renderImport;
 $('i-all').onclick = () => { for (const cb of $('i-list').querySelectorAll('input[type=checkbox]:not(:disabled)')) { cb.checked = true; selectedImportIds.add(cb.value); } updateImportStatus(); };
-$('i-none').onclick = () => { for (const cb of $('i-list').querySelectorAll('input[type=checkbox]:not(:disabled)')) { cb.checked = false; selectedImportIds.delete(cb.value); } updateImportStatus(); };
+$('i-none').onclick = () => { selectedImportIds.clear(); renderImport(); };
 $('i-save').onclick = () => {
   const ids = [...selectedImportIds];
   post('importModels', { providerId: pendingImport.providerId, token: pendingImport.token, ids });

@@ -66,7 +66,9 @@ function fixture(t, initial = {}) {
     } },
     './runtime/native-models.cjs': { readNativeModels: async () => ({ status: 'ready', models: [] }),
       nativeSetSignature: () => '' },
+    './lifecycle/host-disabled.cjs': { isHostDisabled: () => hostDisabled },
   };
+  let hostDisabled = initial.hostDisabled === true;
   const filename = path.resolve(extensionPath, 'src/extension.cjs');
   const realRequire = createRequire(filename);
   const module = { exports: {} };
@@ -82,6 +84,7 @@ function fixture(t, initial = {}) {
       update: async (k, v) => v === undefined ? state.delete(k) : state.set(k, v) } };
   t.after(async () => { try { await module.exports.deactivate(); } catch {} context.subscriptions.forEach(s => s.dispose?.()); });
   return { ...module.exports, context, root, commands, logs, notices, errors, calls, agentEnv, updates,
+    setHostDisabled: value => { hostDisabled = value === true; },
     settle: async (ticks = 30) => { for (let i = 0; i < ticks; i++) await next(); } };
 }
 
@@ -124,4 +127,28 @@ test('disable restores owned settings, removes the injection and disposes hooks'
   assert.equal(f.calls.lsDisposed, 1);
   assert.ok(f.calls.acpDisposed >= 1);
   assert.ok(f.notices.some(text => text.includes('已停用')));
+});
+
+test('deactivate on a host-panel disable restores settings and removes the injection', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  assert.equal(f.calls.remove.length, 0);
+  assert.ok(f.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL);
+  f.setHostDisabled(true);
+  await f.deactivate();
+  assert.equal(f.calls.remove.length, 1, 'panel disable removes workbench injection');
+  assert.equal(f.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL, undefined, 'agentEnv restored via receipt');
+  const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8'));
+  assert.notEqual(saved.enabled, false, 'panel disable does not flip config.enabled');
+});
+
+test('deactivate on reload keeps settings and the injection', async t => {
+  const f = fixture(t);
+  await f.activate(f.context);
+  await f.settle();
+  const url = f.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL;
+  await f.deactivate();
+  assert.equal(f.calls.remove.length, 0, 'reload must not strip the injection');
+  assert.equal(f.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL, url);
 });

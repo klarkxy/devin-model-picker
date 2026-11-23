@@ -39,7 +39,7 @@ Bring your own OpenAI-compatible and Anthropic-compatible API models (**BYOK**) 
 
 Click the model selector button in Devin's composer to open the card grid.
 
-- **Filter & Quick Select**: Start typing immediately to search by model name, provider, or model ID; press `Enter` to select the top matching card, or `Esc` to clear the filter / close the panel.
+- **Filter & shortcuts**: The panel autofocuses the search box, so you can type immediately to filter by model name, provider, or model ID. Press `Esc` to clear the filter, then again to close the panel. Click a card to select it. When focus is not in a text field, `Enter` selects the top matching card.
 - **Effort & Variant Toggles**: Click an effort pill (`L`, `M`, `H`, `xH`, `Max`, etc.) or toggle switch (`Fast`, `1M`, etc.) directly on a card to switch to that exact variant.
 - **Multi-Provider Switching**: When both Devin and one or more BYOK providers offer the same model family (for example `Devin` and `OpenRouter` for `Claude Opus 5.5`), click the provider pill in the top-right corner of the card to switch between providers.
 

@@ -162,6 +162,20 @@ test('native fusion candidates carry family identity from observed natives', () 
   assert.equal(lead.effortOrder, 2);
 });
 
+test('BYOK fusion candidate familyLabel drops the catalog effort suffix', () => {
+  const { buildCatalog } = require('../src/catalog.cjs');
+  const { candidates } = require('../src/picker-api.cjs');
+  const config = { providers: [{ id: 'p', name: 'Magpie',
+    models: [{ id: 'deepseek-reasoner', label: 'DeepSeek Reasoner', efforts: [null, 'high'] }] }] };
+  const leads = candidates(buildCatalog(config), config).leads.filter(c => c.ref.kind === 'byok');
+  const def = leads.find(c => c.effort == null);
+  const high = leads.find(c => c.effort === 'high');
+  assert.ok(def && high, 'null and high effort variants both exist');
+  assert.equal(def.familyLabel, 'DeepSeek Reasoner');
+  assert.equal(high.familyLabel, 'DeepSeek Reasoner', 'series name must not keep "High"');
+  assert.match(high.label, /High$/);
+});
+
 test('/picker/fusion returns 503 while the extension is disabled', async t => {
   const f = await fixture(t, { enabled: false, providers: providers() });
   const res = await fetch(f.base + '/picker/fusion', { method: 'POST',
