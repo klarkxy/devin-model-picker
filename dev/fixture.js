@@ -26,6 +26,14 @@
     addByok('magpie', 'deepseek-v4-pro', 'DeepSeek V4 Pro', [null, 'high']);
     addByok('magpie', 'kimi-k3', 'Kimi K3', [null]);
     addByok('magpie', 'glm-5-3', 'GLM-5.3', [null, 'high']);
+    // Host `costs` metrics on the native Opus family — the card must render
+    // the explicit price line (and hide its '1x' multiplier chip).
+    const opusCosts = [
+      { label: 'Input', value: 5, denominator: '1M tokens' },
+      { label: 'Cached Input', value: 0.5, denominator: '1M tokens' },
+      { label: 'Output', value: 25, denominator: '1M tokens' },
+      { label: 'Effort', text: 'Higher effort consumes more tokens' },
+    ];
     const natives = [
       model('swe-1p6', 'SWE-1.6', { provider: 'windsurf', isDefaultModelInFamily: true, ...fam('fam-swe16', 'SWE-1.6', {}) }),
       model('swe-1p7-medium', 'SWE-1.7 Medium', { provider: 'windsurf', ...fam('fam-swe17', 'SWE-1.7', effort(2, 'Medium')) }),
@@ -34,11 +42,11 @@
         modelCost: { type: 'credit', multiplier: 1 }, ...fam('fam-swe2', 'SWE-2', effort(3, 'High')) }),
       model('swe-2-max', 'SWE-2 Max', { provider: 'windsurf',
         modelCost: { type: 'credit', multiplier: 2.5 }, ...fam('fam-swe2', 'SWE-2', effort(5, 'Max')) }),
-      model('claude-opus-5-5-low', 'Claude Opus 5.5 Low', { provider: 'anthropic',
+      model('claude-opus-5-5-low', 'Claude Opus 5.5 Low', { provider: 'anthropic', costs: opusCosts,
         modelCost: { type: 'credit', multiplier: 0.5 }, ...fam('fam-opus', 'Claude Opus 5.5', effort(1, 'Low')) }),
       model('claude-opus-5-5-medium', 'Claude Opus 5.5 Medium', { provider: 'anthropic', isDefaultModelInFamily: true,
-        modelCost: { type: 'credit', multiplier: 1 }, ...fam('fam-opus', 'Claude Opus 5.5', effort(2, 'Medium')) }),
-      model('claude-opus-5-5-high', 'Claude Opus 5.5 High', { provider: 'anthropic',
+        costs: opusCosts, modelCost: { type: 'credit', multiplier: 1 }, ...fam('fam-opus', 'Claude Opus 5.5', effort(2, 'Medium')) }),
+      model('claude-opus-5-5-high', 'Claude Opus 5.5 High', { provider: 'anthropic', costs: opusCosts,
         modelCost: { type: 'credit', multiplier: 2.5 }, ...fam('fam-opus', 'Claude Opus 5.5', effort(3, 'High')) }),
       model('muse-wonder-high', 'Muse Wonder High', { provider: 'xai', ...fam('fam-muse', 'Muse Wonder', effort(3, 'High')) }),
       model('nemotron-3-5-lightning', 'Nemotron 3.5 Lightning', { provider: 'nvidia', ...fam('fam-nemo', 'Nemotron 3.5', effort(1, 'Lightning')) }),

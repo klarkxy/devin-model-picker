@@ -45,10 +45,11 @@ with sync_playwright() as pw:
     menu = '[data-native-menu]'
     get_view = lambda: page.evaluate("JSON.parse(localStorage.getItem('devin-model-picker:v1')||'{}').view||'missing'")
 
-    # --- adjacent entry is injected next to the trigger ---
-    page.wait_for_selector('[data-dmp-native-switch]', timeout=3000)
-    check('adjacent card-switch present', page.locator('[data-dmp-native-switch]').count() >= 1)
-    check('switch text/label', page.locator('[data-dmp-native-switch]').first.inner_text() == '卡片')
+    # --- no adjacent entry next to the trigger; menu switches only ---
+    page.wait_for_timeout(300)
+    outside = page.evaluate("""[...document.querySelectorAll('[data-dmp-native-switch]')]
+      .filter(el => !el.closest('[role=menu]')).length""")
+    check('no card-switch outside menus', outside == 0, str(outside))
 
     # --- cards mode: trigger opens our panel ---
     page.click(trigger)
@@ -84,7 +85,9 @@ with sync_playwright() as pw:
         card = page.locator('.dmp-card', has_text=name).first
         check('%s card has no cost tag' % name, card.locator('.dmp-cost').count() == 0,
             card.inner_text()[:100])
-    check('no models.dev price rows', page.locator('.dmp-price').count() == 0)
+    check('no price rows while BYOK family shown',
+        all(page.locator('.dmp-card', has_text=name).first.locator('.dmp-price').count() == 0
+            for name in ['Opus', 'DeepSeek', 'Kimi']))
     check('no models.dev reference text', 'models.dev' not in page.locator(panel).inner_text()
         and '参考' not in page.locator(panel).inner_text())
     # A merged card switched to its Devin family shows the tag; back to BYOK hides it.
@@ -93,13 +96,19 @@ with sync_playwright() as pw:
     opus.locator('.dmp-pop button', has_text='Devin').click()
     page.wait_for_timeout(300)
     opus = page.locator('.dmp-card', has_text='Opus').first
-    check('Devin family shows cost tag', opus.locator('.dmp-cost').inner_text() == '1x',
+    check('Devin family shows explicit price',
+        opus.locator('.dmp-price').count() == 1
+        and opus.locator('.dmp-price').inner_text() == '输入 $5 · 缓存输入 $0.5 · 输出 $25 / 1M',
         opus.inner_text()[:120])
+    check('priced card hides multiplier chip', opus.locator('.dmp-cost').count() == 0,
+        opus.inner_text()[:120])
+    page.screenshot(path=SHOTS + '/priced-card.png', clip=opus.bounding_box())
     opus.locator('.dmp-prov').click()
     opus.locator('.dmp-pop button', has_text='Magpie').click()
     page.wait_for_timeout(300)
     opus = page.locator('.dmp-card', has_text='Opus').first
-    check('BYOK family hides cost tag again', opus.locator('.dmp-cost').count() == 0)
+    check('BYOK family hides cost tag again', opus.locator('.dmp-cost').count() == 0
+        and opus.locator('.dmp-price').count() == 0)
     page.screenshot(path=SHOTS + '/native-cost.png', clip=page.locator(panel).bounding_box())
 
     # --- Enter/Space on 经典选择器 must open classic without picking a card ---
@@ -126,13 +135,8 @@ with sync_playwright() as pw:
         check('%s on classic keeps current model' % label, after_value == before_value,
             '%s -> %s' % (before_value, after_value))
         check('%s on classic opens native menu' % label, page.locator(menu).count() == 1)
-        page.evaluate("""() => {
-          const btn = document.querySelector('#composer button[aria-haspopup="menu"]');
-          btn.__dmpSetOpen(false);
-        }""")
-        page.wait_for_selector(menu, state='detached', timeout=3000)
-        page.wait_for_timeout(200)
-        page.locator('#composer [data-dmp-native-switch]').click()
+        page.wait_for_selector(menu + ' [data-dmp-native-switch]', timeout=3000)
+        page.locator(menu + ' [data-dmp-native-switch]').click()
         page.wait_for_selector(panel + '.dmp-open', timeout=3000)
         page.wait_for_timeout(80)
 
@@ -180,12 +184,14 @@ with sync_playwright() as pw:
     page.wait_for_timeout(300)
     check('menu closed after restore', page.locator(menu).count() == 0)
 
-    # --- adjacent switch opens the panel directly ---
+    # --- the in-menu switch opens the panel directly ---
     page.keyboard.press('Escape')
     page.wait_for_timeout(300)
-    page.locator('[data-dmp-native-switch]').first.click()
+    page.click(trigger, modifiers=['Alt'])
+    page.wait_for_selector(menu, timeout=3000)
+    page.locator(menu + ' [data-dmp-native-switch]').click()
     page.wait_for_selector(panel, timeout=3000)
-    check('adjacent switch opens panel', page.locator(panel).count() == 1)
+    check('in-menu switch opens panel', page.locator(panel).count() == 1)
 
     # --- Alt+click is the one-shot escape: native opens, view stays cards ---
     page.keyboard.press('Escape')
