@@ -553,6 +553,41 @@ function selectedVariant(family, cardState, live) {
   return live || matchVariant(family, cardState?.effortOrder ?? null, cardState?.toggles) || defaultVariant(family);
 }
 
+// Explicit price line from the model's `costs` metrics — the same entries the
+// host's hover card reads. Dimension notes (entries with `text`) and fuzzy
+// metrics are skipped; the rest render in data order as "label value" chips
+// sharing a denominator when they all agree.
+function priceInfo(model) {
+  const metrics = (Array.isArray(model?.costs) ? model.costs : []).filter(metric =>
+    metric && metric.text === undefined && !metric.fuzzy &&
+    typeof metric.label === 'string' && Number.isFinite(metric.value));
+  if (!metrics.length) return null;
+  const labelOf = label =>
+    /cache.*(write|creat)/i.test(label) ? '缓存写入'
+    : /cache/i.test(label) ? '缓存输入'
+    : /^input/i.test(label) ? '输入'
+    : /^output/i.test(label) ? '输出'
+    : label;
+  const items = metrics.map(metric => ({
+    label: labelOf(metric.label),
+    value: metric.unit ? String(parseFloat(metric.value.toFixed(3)))
+      : '$' + parseFloat(metric.value.toFixed(3)),
+    denom: String(metric.denominator || '').replace(/\s*tokens?$/i, ''),
+    metric,
+  }));
+  const shared = items.every(item => item.denom === items[0].denom) && items[0].denom
+    ? items[0].denom : null;
+  const text = items.map(item =>
+    item.label + ' ' + item.value + (!shared && item.denom ? ' / ' + item.denom : '')
+  ).join(' · ') + (shared ? ' / ' + shared : '');
+  const title = items.map(item => {
+    const raw = String(item.metric.denominator || '');
+    return item.label + '：' + item.value + (raw ? ' / ' + raw : '')
+      + (item.metric.info ? '（' + item.metric.info + '）' : '');
+  }).join('\n');
+  return { items, text, title };
+}
+
 const PICKER_ORIGIN = 'vscode-file://vscode-app';
 const API_BASE = 'http://127.0.0.1:39852';
 const LS_KEY = 'devin-model-picker:v1';
@@ -561,7 +596,7 @@ const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, ba
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
   underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
   validDraft, pickFusionSlots, hidesCard, sanitizePrefs, prefSets, appendNewKeys, arrangeCards, applyCardDrop, dropModeFromRatio,
-  moveCardKey, toggleKey, mergeSubsetOrder, viewMode, skipsPanelHotkeys, costTagFor, selectedVariant,
+  moveCardKey, toggleKey, mergeSubsetOrder, viewMode, skipsPanelHotkeys, costTagFor, selectedVariant, priceInfo,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
 if (typeof module === 'object' && module.exports) { module.exports = exportsMap; return; }
 
@@ -613,6 +648,7 @@ const CSS = `
 .dmp-sub-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dmp-cost{font-size:9px;color:var(--dmp-muted);border:1px solid currentColor;border-radius:4px;padding:0 3px}
 .dmp-cost.dmp-tagfree{color:#16a34a}
+.dmp-price{font-size:10px;color:var(--dmp-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dmp-classic{flex:none;border:1px solid var(--dmp-border);border-radius:7px;background:transparent;
  color:var(--dmp-muted);font-size:11px;padding:4px 9px;cursor:pointer;white-space:nowrap}
 .dmp-classic:hover{color:var(--dmp-fg);border-color:var(--dmp-muted)}
@@ -734,11 +770,12 @@ function el(tag, className, text) {
   return node;
 }
 
+const isFreeTag = (tag, free) => free === true || /free|免费/i.test(tag.label);
+
 // One quiet chip in the card's top row — the label is Devin's own tag text;
 // the tooltip explains the source when the tag carries none of its own.
 function appendCostTag(node, tag, free) {
-  const freeTag = free === true || /free|免费/i.test(tag.label);
-  const chip = el('span', 'dmp-cost' + (freeTag ? ' dmp-tagfree' : ''), tag.label);
+  const chip = el('span', 'dmp-cost' + (isFreeTag(tag, free) ? ' dmp-tagfree' : ''), tag.label);
   chip.title = tag.tooltip || 'Devin 原生计费标签';
   node.appendChild(chip);
 }
@@ -857,6 +894,7 @@ function setView(next) {
     data.view = view;
     localStorage.setItem(LS_KEY, JSON.stringify(data));
   } catch {}
+  bind(); // sync: the adjacent switch must be gone before backToCards positions the panel
 }
 
 // Panel ----------------------------------------------------------------------
@@ -1482,14 +1520,17 @@ function buildCard(card, index, located) {
   // getCostTag word, shown instead of the generic free badge.
   const costVariant = selectedVariant(family, cardState, live);
   const costTag = costVariant?.native === true ? costTagFor(located, costVariant.model) : null;
+  const price = costVariant?.native === true ? priceInfo(costVariant.model) : null;
 
   const top = el('div', 'dmp-top');
   top.appendChild(el('span', 'dmp-idx', String(index + 1).padStart(2, '0')));
   const dot = el('span', 'dmp-dot');
   dot.style.background = VENDORS[family.vendor] || VENDORS.other;
   top.appendChild(dot);
-  if (costTag) appendCostTag(top, costTag, costVariant.free);
-  else if (family.free) top.appendChild(el('span', 'dmp-free', '免费'));
+  // A priced card hides the relative/multiplier chip — the price line below
+  // replaces it; a free tag still shows.
+  if (costTag && (!price || isFreeTag(costTag, costVariant.free))) appendCostTag(top, costTag, costVariant.free);
+  else if (!costTag && family.free) top.appendChild(el('span', 'dmp-free', '免费'));
   if (card.favorite) top.appendChild(el('span', 'dmp-star', '★'));
   const chip = el('button', 'dmp-prov', family.providerName || 'Devin');
   chip.title = card.families.length > 1 ? '切换供应商' : '';
@@ -1515,6 +1556,11 @@ function buildCard(card, index, located) {
     if (live && target) selectModel(target.uid); else rerenderGrid();
   }));
   node.appendChild(sub);
+  if (price) {
+    const priceRow = el('div', 'dmp-price', price.text);
+    priceRow.title = price.title;
+    node.appendChild(priceRow);
+  }
 
   if (family.cells.length) {
     const eff = el('div', 'dmp-eff');
@@ -1599,13 +1645,14 @@ function buildFusionCard(card, index, located, state) {
   }
   const costVariant = selectedVariant(card, cardState, held);
   const costTag = costVariant?.native === true ? costTagFor(located, costVariant.model) : null;
+  const price = costVariant?.native === true ? priceInfo(costVariant.model) : null;
 
   const top = el('div', 'dmp-top');
   top.appendChild(el('span', 'dmp-idx', String(index + 1).padStart(2, '0')));
   const dot = el('span', 'dmp-dot');
   dot.style.background = VENDORS[card.vendor] || VENDORS.other;
   top.appendChild(dot);
-  if (costTag) appendCostTag(top, costTag, costVariant.free);
+  if (costTag && (!price || isFreeTag(costTag, costVariant.free))) appendCostTag(top, costTag, costVariant.free);
   if (card.favorite) top.appendChild(el('span', 'dmp-star', '★'));
   top.appendChild(el('span', 'dmp-prov', card.providerName || 'Devin'));
   node.appendChild(top);
@@ -1624,6 +1671,11 @@ function buildFusionCard(card, index, located, state) {
   const sub = el('div', 'dmp-sub');
   sub.appendChild(el('span', 'dmp-sub-txt', (card.familyLabel || card.name) + ' · ' + (card.providerName || 'Devin')));
   node.appendChild(sub);
+  if (price) {
+    const priceRow = el('div', 'dmp-price', price.text);
+    priceRow.title = price.title;
+    node.appendChild(priceRow);
+  }
 
   const fill = variant => {
     if (!variant || blocked) return;
@@ -1724,7 +1776,12 @@ function rerenderGrid() {
     const oldErr = panel.querySelector('.dmp-err'); if (oldErr) oldErr.remove();
     if (!lastState) { grid.appendChild(el('div', 'dmp-empty', '本地服务未就绪')); renderFoot(); return; }
     const cards = panelState.activeSlot === 'lead' ? fusionCards.lead : fusionCards.sidekick;
-    const all = arrangeCards(cards, activePrefs(), true);
+    // The 供应商 tab writes hides into single.hidden; fusion grids honor them
+    // too (BYOK cards are unaffected — their visibility is the provider's own
+    // switch). Merged here, never persisted: order/favorites/aliases stay on
+    // the slot prefs.
+    const prefs = activePrefs();
+    const all = arrangeCards(cards, { ...prefs, hidden: [...prefs.hidden, ...sets.single.hidden] }, true);
     panelState.fullKeys = all.map(card => card.prefKey);
     const arranged = all.filter(card => !card.hidden);
     const rendered = [];
@@ -1840,7 +1897,21 @@ function positionPanel(trigger) {
   const pw = panel.offsetWidth;
   const left = Math.min(Math.max(8, rect.right - pw), Math.max(8, window.innerWidth - pw - 8));
   panel.style.left = left + 'px';
-  panel.style.top = (above ? Math.max(minTop, rect.top - maxH - 8) : rect.bottom + 8) + 'px';
+  // Anchor by the edge facing the trigger — an above-opened panel pins its
+  // bottom 8px over the trigger regardless of how tall the content actually
+  // is. Only when the tallest allowed panel still fits under minTop, though:
+  // maxH is floored at 120, so a short window can exceed the space above and
+  // the top must be pinned at minTop instead.
+  if (above && rect.top - 8 - maxH >= minTop) {
+    panel.style.top = 'auto';
+    panel.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+  } else if (above) {
+    panel.style.bottom = 'auto';
+    panel.style.top = minTop + 'px';
+  } else {
+    panel.style.bottom = 'auto';
+    panel.style.top = (rect.bottom + 8) + 'px';
+  }
 }
 
 function openPanel(trigger, located) {
@@ -2018,9 +2089,10 @@ function openClassic(trigger) {
   try { trigger.dispatchEvent(new MouseEvent('click', init)); } catch {}
 }
 
-// The adjacent "卡片" entry — always present next to a bound trigger, and also
-// injected at the top of a proven model menu (portal fallback). Click restores
-// the cards view and opens the panel in the same gesture.
+// The "卡片" entry: always injected at the top of a proven model menu; next to
+// a bound trigger it exists only in classic view — a visible way back when the
+// native menu owns the composer. Click restores the cards view and opens the
+// panel in the same gesture.
 function nativeSwitch(trigger) {
   const btn = el('button', 'dmp-native-switch', '卡片');
   btn.type = 'button';
@@ -2077,8 +2149,8 @@ function bindMenus() {
 
 // Trigger binding ------------------------------------------------------------
 function bind() {
-  // Switches whose trigger React replaced are removed first so a fresh
-  // trigger always gets its own adjacent entry.
+  // Switches whose trigger React replaced are removed first so a stale entry
+  // never lingers in a menu portal.
   for (const sw of document.querySelectorAll('[data-dmp-native-switch]')) {
     const owner = sw.__dmpTrigger;
     if (owner && !owner.isConnected) sw.remove();
@@ -2091,9 +2163,18 @@ function bind() {
     if (!located) continue;
     button.setAttribute('data-dmp-bound', '');
     button.__dmpOpenChange = openChangeFor(button, located) || undefined;
+  }
+  // The adjacent switch is the classic view's visible way back — it must exist
+  // only while the native menu owns the trigger, never in cards view.
+  for (const button of document.querySelectorAll('button[aria-haspopup="menu"][data-dmp-bound]')) {
     const near = sibling => sibling?.hasAttribute?.('data-dmp-native-switch');
-    if (!near(button.previousElementSibling) && !near(button.nextElementSibling)) {
+    if (view === 'classic' && !near(button.previousElementSibling) && !near(button.nextElementSibling)) {
       button.parentElement?.insertBefore(nativeSwitch(button), button.nextSibling);
+    }
+  }
+  if (view !== 'classic') {
+    for (const sw of document.querySelectorAll('[data-dmp-native-switch]')) {
+      if (!sw.closest('[role="menu"]')) sw.remove();
     }
   }
   bindMenus();

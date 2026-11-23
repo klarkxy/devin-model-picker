@@ -481,6 +481,60 @@ test('selectedVariant prefers live, then the card state match, then the default'
   assert.equal(picker.selectedVariant(family, null, null).uid, 'a', 'no state at all still resolves');
 });
 
+test('priceInfo renders explicit prices with Chinese labels and a shared denominator', () => {
+  const model = { costs: [
+    { label: 'Input', value: 2, denominator: '1M tokens' },
+    { label: 'Cached Input', value: 0.1, denominator: '1M tokens' },
+    { label: 'Output', value: 10, denominator: '1M tokens' },
+    { label: 'Effort', text: 'Higher effort consumes more tokens' },
+  ] };
+  const info = picker.priceInfo(model);
+  assert.equal(info.text, '输入 $2 · 缓存输入 $0.1 · 输出 $10 / 1M');
+  assert.equal(info.title, '输入：$2 / 1M tokens\n缓存输入：$0.1 / 1M tokens\n输出：$10 / 1M tokens');
+  assert.equal(info.items.length, 3, 'the text note is dropped');
+});
+
+test('priceInfo drops text/fuzzy/non-finite metrics and returns null without priced entries', () => {
+  const info = picker.priceInfo({ costs: [
+    { label: 'Note', text: 'dimension note' },
+    { label: 'Input', value: 1, denominator: '1M tokens', fuzzy: true },
+    { label: 'Input', value: NaN, denominator: '1M tokens' },
+    { label: 'Input', denominator: '1M tokens' },
+    { value: 9, denominator: '1M tokens' },
+    { label: 'Output', value: 3, denominator: '1M tokens' },
+  ] });
+  assert.equal(info.text, '输出 $3 / 1M');
+  assert.equal(picker.priceInfo(null), null);
+  assert.equal(picker.priceInfo({}), null);
+  assert.equal(picker.priceInfo({ costs: [] }), null);
+  assert.equal(picker.priceInfo({ costs: [{ label: 'x', text: 'note' }] }), null);
+});
+
+test('priceInfo: unit metrics skip the $ sign, mixed denominators print per item', () => {
+  const unit = picker.priceInfo({ costs: [
+    { label: 'Requests', value: 0.05, unit: 'per request', denominator: '1K requests' },
+  ] });
+  assert.equal(unit.text, 'Requests 0.05 / 1K requests');
+  const mixed = picker.priceInfo({ costs: [
+    { label: 'Input', value: 2, denominator: '1M tokens' },
+    { label: 'Output', value: 10, denominator: '1K tokens' },
+  ] });
+  assert.equal(mixed.text, '输入 $2 / 1M · 输出 $10 / 1K');
+  const infoTitle = picker.priceInfo({ costs: [
+    { label: 'Input', value: 2, denominator: '1M tokens', info: 'cached reads billed' },
+  ] });
+  assert.equal(infoTitle.title, '输入：$2 / 1M tokens（cached reads billed）');
+});
+
+test('priceInfo: unknown labels pass through, cache-write maps to 缓存写入', () => {
+  const info = picker.priceInfo({ costs: [
+    { label: 'Batch Input', value: 1, denominator: '1M tokens' },
+    { label: 'Cache Write', value: 1.25, denominator: '1M tokens' },
+    { label: 'Cache Creation', value: 6, denominator: '1M tokens' },
+  ] });
+  assert.equal(info.text, 'Batch Input $1 · 缓存写入 $1.25 · 缓存写入 $6 / 1M');
+});
+
 test('classic view is wired into the capture listeners and the switch affordances exist', () => {
   const source = fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8');
   const listeners = source.slice(source.indexOf("['pointerdown', 'mousedown', 'click']"));
