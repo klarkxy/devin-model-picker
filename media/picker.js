@@ -365,7 +365,13 @@ function groupFusion(candidates, nativeIndex) {
       ? (candidate.effortOrder ?? (candidate.effort == null ? null : (EFFORT_ORDER[String(candidate.effort).toLowerCase()] ?? 1e9)))
       : (effortDim ? effortDim[1].order : (candidate.effortOrder ?? null));
     const toggles = Object.fromEntries(toggleDims.map(([key, val]) => [key, Number(val.order) || 0]));
-    const parsed = cardName(nativeEntry?.familyLabel || candidate.familyLabel || candidate.label);
+    // BYOK card identity (name/version/variant/prefKey) uses the pre-suffix
+    // naming basis so preference keys written by earlier versions resolve;
+    // familyLabel below still shows the effort-stripped series name.
+    const nameBasis = ref.kind === 'byok'
+      ? (candidate.legacyFamilyLabel || candidate.familyLabel || candidate.label)
+      : (nativeEntry?.familyLabel || candidate.familyLabel || candidate.label);
+    const parsed = cardName(nameBasis);
     const key = (ref.kind === 'byok' ? 'b:' : 'n:') + familyKey;
     const vendor = ref.kind === 'byok'
       ? vendorOf(undefined, { label: candidate.label, family: candidate.familyLabel })

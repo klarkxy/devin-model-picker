@@ -50,7 +50,7 @@ function node(tag, id) {
       if (typeof hook === 'function') hook(ev);
       return true;
     },
-    click() { n.dispatchEvent({ type: 'click' }); },
+    click() { if (n.disabled) return; n.dispatchEvent({ type: 'click' }); },
     appendChild(child) { n.childNodes.push(child); child.parentNode = n; return child; },
     showModal() { n.open = true; },
     close() { n.open = false; },
@@ -148,9 +148,9 @@ test('取消全选 after a filter clears hidden import selections', () => {
   session.byId['i-search'].oninput();
   assert.equal(session.byId['i-list'].querySelectorAll('input[type=checkbox]:not(:disabled)').length, 1);
   session.byId['i-none'].click();
+  assert.equal(session.byId['i-save'].disabled, true, 'empty selection disables the import button');
   session.byId['i-save'].click();
-  assert.equal(posted(session, 'importModels').length, 1);
-  assert.deepEqual(postedIds(session), [], 'hidden Beta must not remain selected after 取消全选');
+  assert.equal(posted(session, 'importModels').length, 0, 'a disabled import button posts nothing');
 });
 
 test('全选当前 still selects only the filtered import rows', () => {

@@ -34,7 +34,7 @@ function fixture(t, initial = {}) {
     } },
     env: { appRoot: initial.appRoot || '/fake-approot' },
     commands: { registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
-      executeCommand: async () => {} },
+      executeCommand: async id => { calls.executed.push(id); } },
     window: {
       createOutputChannel: () => ({ appendLine: v => logs.push(v), show() {}, dispose() {} }),
       createStatusBarItem: () => ({ show() {}, dispose() {} }),
@@ -44,7 +44,7 @@ function fixture(t, initial = {}) {
   };
   const identity = { service: 'devin-model-picker', version: '0.1.0', sourceId: 's', networkId: 'n', rootId: 'r' };
   let fetchImpl = async () => new Response(JSON.stringify({ ...identity, managementProtocol: 1, instanceId: 'i', activeRequests: 0, draining: false }));
-  const calls = { apply: [], remove: [], acp: [], ls: [], host: [], refresh: [] };
+  const calls = { apply: [], remove: [], acp: [], ls: [], host: [], refresh: [], executed: [] };
   let acpInstalled = { dispose() { calls.acpDisposed = (calls.acpDisposed || 0) + 1; } };
   const overrides = {
     vscode,
@@ -52,7 +52,7 @@ function fixture(t, initial = {}) {
     'node:child_process': { spawn: () => { const c = new EventEmitter(); c.unref = () => {}; return c; } },
     './inject.cjs': {
       applyInjection: options => { calls.apply.push(options); return { ok: true, changed: true }; },
-      removeInjection: options => { calls.remove.push(options); return { changed: true }; },
+      removeInjection: options => { calls.remove.push(options); return initial.removeResult ?? { changed: true }; },
     },
     './runtime/acp-injection.cjs': { installAcpInjection: async options => { calls.acp.push(options); return acpInstalled; } },
     './runtime/ls-injection.cjs': { installLsInjection: async options => {
@@ -129,7 +129,7 @@ test('disable restores owned settings, removes the injection and disposes hooks'
   assert.ok(f.notices.some(text => text.includes('已停用')));
 });
 
-test('deactivate on a host-panel disable restores settings and removes the injection', async t => {
+test('deactivate on a host-panel disable restores settings, removes the injection and reloads', async t => {
   const f = fixture(t);
   await f.activate(f.context);
   await f.settle();
@@ -138,9 +138,22 @@ test('deactivate on a host-panel disable restores settings and removes the injec
   f.setHostDisabled(true);
   await f.deactivate();
   assert.equal(f.calls.remove.length, 1, 'panel disable removes workbench injection');
+  assert.ok(f.calls.executed.includes('workbench.action.reloadWindow'),
+    'the current window reloads so injected listeners are dropped');
   assert.equal(f.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL, undefined, 'agentEnv restored via receipt');
   const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'config.json'), 'utf8'));
   assert.notEqual(saved.enabled, false, 'panel disable does not flip config.enabled');
+});
+
+test('deactivate on a host-panel disable without disk changes does not reload', async t => {
+  const f = fixture(t, { removeResult: { changed: false } });
+  await f.activate(f.context);
+  await f.settle();
+  f.setHostDisabled(true);
+  await f.deactivate();
+  assert.equal(f.calls.remove.length, 1);
+  assert.ok(!f.calls.executed.includes('workbench.action.reloadWindow'),
+    'nothing was removed from this install — no pointless reload');
 });
 
 test('deactivate on reload keeps settings and the injection', async t => {
@@ -151,4 +164,6 @@ test('deactivate on reload keeps settings and the injection', async t => {
   await f.deactivate();
   assert.equal(f.calls.remove.length, 0, 'reload must not strip the injection');
   assert.equal(f.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL, url);
+  assert.ok(!f.calls.executed.includes('workbench.action.reloadWindow'),
+    'a plain reload must not schedule another one');
 });

@@ -100,6 +100,33 @@ test('groupFusion keeps BYOK effort variants in one family card', () => {
   assert.deepEqual(swe.cells.map(cell => cell.label), ['H'], 'native effort name comes from familyMetadata');
 });
 
+test('groupFusion keeps the pre-suffix prefKey for effort-only BYOK families', () => {
+  const { buildCatalog } = require('../src/catalog.cjs');
+  const { candidates } = require('../src/picker-api.cjs');
+  const config = { providers: [{ id: 'p', name: 'Legacy',
+    models: [{ id: 'legacy-model', label: 'Legacy Model', efforts: ['high'] }] }] };
+  const leads = candidates(buildCatalog(config), config).leads.filter(c => c.ref.kind === 'byok');
+  assert.equal(leads.length, 1, 'a single high-effort route, no null default');
+  const cards = picker.groupFusion(leads, new Map());
+  const byok = cards.filter(card => card.byok);
+  assert.equal(byok.length, 1);
+  const card = byok[0];
+  assert.equal(card.familyLabel, 'Legacy Model', 'display title drops the effort word');
+  const oldKey = 'legacy||model high';
+  assert.equal(card.prefKey, picker.cardKey(picker.cardName('Legacy Model High')),
+    'prefKey keeps the pre-strip naming basis so stored prefs still resolve');
+  assert.equal(card.prefKey, oldKey);
+  const prefs = { order: [oldKey], favorites: [oldKey], hidden: [oldKey], aliases: { [oldKey]: '旧别名' } };
+  const ranked = picker.arrangeCards([{ prefKey: 'other||', cardKey: 'b:other', byok: true, variants: [] }, card],
+    { order: [oldKey], favorites: [], hidden: [], aliases: {} }, true);
+  assert.equal(ranked[0].prefKey, oldKey, 'order resolves the old key');
+  const arranged = picker.arrangeCards([card], prefs, true);
+  assert.equal(arranged[0].favorite, true, 'favorites resolve the old key');
+  assert.equal(arranged[0].hidden, false, 'BYOK cards stay exempt from prefs.hidden');
+  assert.equal(picker.hidesCard({ prefKey: oldKey, byok: false }, new Set(prefs.hidden)), true,
+    'the restored key still hides a non-BYOK card');
+});
+
 test('prefillFusion parses dmp slots and official fusion uids', () => {
   const state = { fusionSlots: { a: { lead: { kind: 'byok', uid: 'dmp-1' }, sidekick: { kind: 'native', uid: 'swe-2-high' } } } };
   const candidates = { leads: [{ ref: { kind: 'native', uid: 'claude-opus-5-5-high' } }],
