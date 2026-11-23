@@ -48,14 +48,22 @@ function candidates(catalog, config) {
     const effortOrder = route.effort == null ? null
       : (index >= 0 ? index : (effortMetadata(route.effort).order ?? null));
     // Label without the "<provider> · " prefix — the card's family name.
+    // route.label / shortLabel append the effort word (e.g. " High"); strip it
+    // so Fusion slot chips can add the compact abbreviation once.
+    // legacyFamilyLabel keeps the pre-strip naming basis so the renderer can
+    // key card preferences exactly like versions before the strip did.
     const label = route.label || route.model;
     const prefix = (provider?.name || route.providerId) + ' · ';
+    const effortName = route.effort ? effortMetadata(route.effort).name : '';
+    const legacyFamilyLabel = label.startsWith(prefix) ? label.slice(prefix.length) : label;
+    let familyLabel = route.shortLabel || legacyFamilyLabel;
+    if (effortName && familyLabel.endsWith(' ' + effortName)) familyLabel = familyLabel.slice(0, -(effortName.length + 1));
     const candidate = {
       ref: { kind: 'byok', uid: route.uid },
       label, providerName: provider?.name || route.providerId,
       effort: route.effort ?? null,
       ...(effortOrder != null ? { effortOrder } : {}),
-      familyLabel: label.startsWith(prefix) ? label.slice(prefix.length) : label,
+      familyLabel, legacyFamilyLabel,
       familyKey: 'byok:' + route.providerId + ':' + route.model,
     };
     leads.push(candidate);

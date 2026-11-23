@@ -84,9 +84,27 @@ function cardName(label) {
 
 const EFFORT_SHORT = { none: 'Off', off: 'Off', minimal: 'Min', low: 'L',
   medium: 'M', high: 'H', xhigh: 'xH', max: 'Max', ultra: 'U' };
+const EFFORT_NAMES = { none: 'None', off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium',
+  high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra' };
 // Only known effort words get compact labels; family dimension names like
 // Flash/Lightning keep their full word (cells render at 10px).
 const effortLabel = effort => effort == null ? '' : (EFFORT_SHORT[String(effort).toLowerCase()] ?? String(effort));
+
+function stripEffortSuffix(basis, effort) {
+  const text = String(basis || '');
+  if (!text || effort == null || effort === '') return text;
+  const raw = String(effort);
+  const lower = raw.toLowerCase();
+  const suffixes = [];
+  for (const suffix of [EFFORT_NAMES[lower], EFFORT_SHORT[lower], raw]) {
+    if (suffix && !suffixes.includes(suffix)) suffixes.push(suffix);
+  }
+  suffixes.sort((a, b) => b.length - a.length);
+  for (const suffix of suffixes) {
+    if (text.endsWith(' ' + suffix)) return text.slice(0, -(suffix.length + 1));
+  }
+  return text;
+}
 
 const filterNorm = text => String(text || '').toLowerCase().replace(/[-._\s/]+/g, '');
 const filterMatch = (needle, fields) => {
@@ -135,6 +153,24 @@ function stripProvider(label) {
   const raw = String(label || '');
   const index = raw.indexOf(' · ');
   return index >= 0 ? raw.slice(index + 3) : raw;
+}
+
+function fusionSlotText(cand, ref) {
+  let basis = cand?.familyLabel || '';
+  if (!basis && cand?.label) basis = stripProvider(cand.label);
+  basis = stripEffortSuffix(basis, cand?.effort);
+  const parsed = cardName(basis || ref?.uid || '');
+  const eff = cand?.effort != null ? effortLabel(cand.effort) : '';
+  return [parsed.name, parsed.version, parsed.variant, eff].filter(Boolean).join(' ') || ref?.uid || '';
+}
+
+function clipboardStatus(writeText, uid) {
+  const fail = { ok: false, text: '复制失败' };
+  if (typeof writeText !== 'function' || uid == null || uid === '') return Promise.resolve(fail);
+  return Promise.resolve().then(() => writeText(uid)).then(
+    () => ({ ok: true, text: '已复制模型 ID：' + uid }),
+    () => fail
+  );
 }
 
 const HIDDEN_DISPLAY = new Set(['model-router', 'invisible', 'arena']);
@@ -329,10 +365,19 @@ function groupFusion(candidates, nativeIndex) {
       ? (candidate.effortOrder ?? (candidate.effort == null ? null : (EFFORT_ORDER[String(candidate.effort).toLowerCase()] ?? 1e9)))
       : (effortDim ? effortDim[1].order : (candidate.effortOrder ?? null));
     const toggles = Object.fromEntries(toggleDims.map(([key, val]) => [key, Number(val.order) || 0]));
-    const parsed = cardName(nativeEntry?.familyLabel || candidate.familyLabel || candidate.label);
+    // BYOK card identity (name/version/variant/prefKey) uses the pre-suffix
+    // naming basis so preference keys written by earlier versions resolve;
+    // familyLabel below still shows the effort-stripped series name.
+    const nameBasis = ref.kind === 'byok'
+      ? (candidate.legacyFamilyLabel || candidate.familyLabel || candidate.label)
+      : (nativeEntry?.familyLabel || candidate.familyLabel || candidate.label);
+    const parsed = cardName(nameBasis);
     const key = (ref.kind === 'byok' ? 'b:' : 'n:') + familyKey;
+    const vendor = ref.kind === 'byok'
+      ? vendorOf(undefined, { label: candidate.label, family: candidate.familyLabel })
+      : vendorOf(nativeEntry || { label: candidate.label, familyLabel: candidate.familyLabel });
     if (!cards.has(key)) cards.set(key, { ...parsed, cardKey: key, prefKey: cardKey(parsed), providerName: candidate.providerName,
-      vendor: ref.kind === 'byok' ? 'other' : 'windsurf', variants: [], familyLabel: '', byok: ref.kind === 'byok',
+      vendor, variants: [], familyLabel: '', byok: ref.kind === 'byok',
       providerId: ref.kind === 'byok' ? (candidate.familyKey || '').split(':')[1] || null : null,
       modelId: ref.kind === 'byok' ? (candidate.familyKey || '').split(':')[2] || null : null });
     const card = cards.get(key);
@@ -595,6 +640,7 @@ const LS_KEY = 'devin-model-picker:v1';
 const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, baseLabel,
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
   underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
+  stripEffortSuffix, fusionSlotText, clipboardStatus,
   validDraft, pickFusionSlots, hidesCard, sanitizePrefs, prefSets, appendNewKeys, arrangeCards, applyCardDrop, dropModeFromRatio,
   moveCardKey, toggleKey, mergeSubsetOrder, viewMode, skipsPanelHotkeys, costTagFor, selectedVariant, priceInfo,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
@@ -604,7 +650,7 @@ if (typeof module === 'object' && module.exports) { module.exports = exportsMap;
 // DOM side. Everything below runs inside the workbench window.
 // ---------------------------------------------------------------------------
 if (window.__devinModelPicker) return;
-window.__devinModelPicker = { version: '0.1.0' };
+window.__devinModelPicker = { version: '0.2.1' };
 console.log('[devin-model-picker] loaded');
 
 const CSS = `
@@ -648,8 +694,11 @@ const CSS = `
 .dmp-sub-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dmp-cost{font-size:9px;color:var(--dmp-muted);border:1px solid currentColor;border-radius:4px;padding:0 3px}
 .dmp-cost.dmp-tagfree{color:#16a34a}
+.dmp-role{font-size:9px;font-weight:600;color:var(--dmp-sel);background:var(--dmp-chip);
+ border:1px solid var(--dmp-sel);border-radius:4px;padding:0 4px;white-space:nowrap}
+.dmp-role.dmp-role-sk{color:var(--dmp-fg);border-color:var(--dmp-border)}
 .dmp-price{font-size:10px;color:var(--dmp-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dmp-classic{flex:none;border:1px solid var(--dmp-border);border-radius:7px;background:transparent;
+.dmp-classic{flex:none;margin-left:auto;border:1px solid var(--dmp-border);border-radius:7px;background:transparent;
  color:var(--dmp-muted);font-size:11px;padding:4px 9px;cursor:pointer;white-space:nowrap}
 .dmp-classic:hover{color:var(--dmp-fg);border-color:var(--dmp-muted)}
 .dmp-native-switch{flex:none;margin-left:4px;border:1px solid rgba(127,127,127,.4);border-radius:6px;
@@ -676,6 +725,7 @@ const CSS = `
 .dmp-tog:disabled{opacity:.4;cursor:default}
 .dmp-foot{padding:7px 12px;border-top:1px solid var(--dmp-border);font-size:11px;
  color:var(--dmp-muted);display:flex;align-items:center;gap:8px}
+.dmp-foot-msg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dmp-empty{padding:24px;text-align:center;color:var(--dmp-muted);font-size:12px}
 .dmp-pop{position:absolute;top:22px;right:8px;z-index:5;background:var(--dmp-bg);
  border:1px solid var(--dmp-border);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.3);
@@ -689,10 +739,10 @@ const CSS = `
  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dmp-slot.dmp-on{border-color:var(--dmp-sel);color:var(--dmp-fg)}
 .dmp-slot b{display:block;font-size:9px;font-weight:600;color:var(--dmp-muted);letter-spacing:.04em}
-.dmp-apply{margin-left:auto;border:0;border-radius:8px;background:var(--dmp-sel);color:#fff;
+.dmp-apply{flex:none;margin-left:auto;border:0;border-radius:8px;background:var(--dmp-sel);color:#fff;
  font-size:12px;padding:6px 14px;cursor:pointer}
 .dmp-apply:disabled{opacity:.45;cursor:default}
-.dmp-err{font-size:11px;color:#ef4444}
+.dmp-err{flex:none;font-size:11px;color:#ef4444}
 .dmp-card[data-drop="before"]{box-shadow:-3px 0 0 0 var(--dmp-sel)}
 .dmp-card[data-drop="after"]{box-shadow:3px 0 0 0 var(--dmp-sel)}
 .dmp-card[data-drop="swap"]{outline:2px dashed var(--dmp-sel);outline-offset:-2px}
@@ -718,19 +768,22 @@ const CSS = `
 .dmp-panel.dmp-mode-prov .dmp-grid{display:none}
 .dmp-panel.dmp-mode-prov .dmp-filter{display:none}
 .dmp-plist{width:172px;flex:none;overflow-y:auto;border-right:1px solid var(--dmp-border);padding:6px}
-.dmp-pitem{display:block;width:100%;text-align:left;border:0;background:transparent;
+.dmp-pitem{display:flex;align-items:center;gap:5px;width:100%;text-align:left;border:0;background:transparent;
  color:var(--dmp-fg);padding:7px 8px;border-radius:8px;cursor:pointer;font-size:12px}
 .dmp-pitem:hover{background:var(--dmp-card-hover)}
 .dmp-pitem.dmp-on{background:var(--dmp-chip);outline:1px solid var(--dmp-sel)}
-.dmp-pitem .cnt{color:var(--dmp-muted);font-size:10px;margin-left:4px}
-.dmp-pitem.dmp-additem{color:var(--dmp-muted);border:1px dashed var(--dmp-border);margin-top:6px;text-align:center}
+.dmp-pitem .pname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dmp-pitem .cnt{color:var(--dmp-muted);font-size:10px;flex:none}
+.dmp-pitem.dmp-additem{display:block;color:var(--dmp-muted);border:1px dashed var(--dmp-border);margin-top:6px;text-align:center}
 .dmp-pitem.dmp-additem:hover{color:var(--dmp-fg)}
 .dmp-fmt{font-size:9px;color:var(--dmp-muted);border:1px solid var(--dmp-border);
- border-radius:4px;padding:0 4px;margin-left:5px;white-space:nowrap}
+ border-radius:4px;padding:0 4px;flex:none;white-space:nowrap}
 .dmp-pdetail{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
 .dmp-pd-head{padding:10px 12px 6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
  border-bottom:1px solid var(--dmp-border)}
-.dmp-pd-name{font-size:13px;font-weight:600;cursor:text}
+.dmp-pd-name{font-size:13px;font-weight:600;cursor:text;border-bottom:1px dashed transparent}
+.dmp-pd-name:hover{border-bottom-color:var(--dmp-muted)}
+.dmp-pd-title{font-size:13px;font-weight:600}
 .dmp-pd-url{font-size:10px;color:var(--dmp-muted);overflow:hidden;text-overflow:ellipsis;
  white-space:nowrap;max-width:100%}
 .dmp-pd-acts{margin-left:auto;display:flex;gap:6px}
@@ -1029,7 +1082,19 @@ function cardMenuItems(card, resolveUid) {
     delete prefs.aliases[key]; savePrefs(); rerenderGrid(); } });
   const uid = resolveUid();
   if (uid) items.push({ label: '复制模型 ID', action: () => {
-    try { navigator.clipboard?.writeText(uid)?.catch?.(() => {}); } catch {} } });
+    const write = navigator.clipboard?.writeText?.bind(navigator.clipboard);
+    void clipboardStatus(write, uid).then(result => {
+      if (!panelState) return;
+      panelState.status = result.text;
+      renderFoot();
+      setTimeout(() => {
+        if (panelState && panelState.status === result.text) {
+          panelState.status = '';
+          renderFoot();
+        }
+      }, 2000);
+    });
+  } });
   const byokInfo = card.providerId ? card
     : (card.families || []).find(family => family.providerId) || null;
   if (byokInfo) {
@@ -1185,14 +1250,14 @@ function renderProviders() {
   const devins = devinCards();
   const devShown = devins.cards.filter(card => !devins.hidden.has(card.prefKey)).length;
   const devItem = el('button', 'dmp-pitem' + (sel === 'devin' ? ' dmp-on' : ''));
-  devItem.appendChild(el('span', '', '\u0044evin'));
+  devItem.appendChild(el('span', 'pname', '\u0044evin'));
   devItem.appendChild(el('span', 'cnt', devShown + '/' + devins.cards.length));
   devItem.addEventListener('click', () => { panelState.provSel = 'devin'; panelState.provEdit = null; panelState.provError = ''; renderProviders(); });
   list.appendChild(devItem);
   for (const provider of panelState.providers || []) {
     const shown = (provider.models || []).filter(model => model.enabled).length;
     const item = el('button', 'dmp-pitem' + (sel === provider.id ? ' dmp-on' : ''));
-    item.appendChild(el('span', '', provider.name));
+    item.appendChild(el('span', 'pname', provider.name));
     item.appendChild(el('span', 'cnt', shown + '/' + (provider.models || []).length));
     item.appendChild(el('span', 'dmp-fmt', fmtLabel(provider.apiFormat)));
     item.addEventListener('click', () => {
@@ -1227,7 +1292,7 @@ function renderModelList(box, items, { toggle, bulk }) {
   const tools = el('div', 'dmp-pd-tools');
   const search = el('input', '');
   search.type = 'text';
-  search.placeholder = '\u7b5b\u9009\u6a21\u578b';
+  search.placeholder = '\u7b5b\u9009\u6a21\u578b\u540d\u79f0\u6216 ID\u2026';
   search.value = panelState.provSearch || '';
   const listEl = el('div', 'dmp-mlist');
   const err = el('div', 'dmp-err');
@@ -1236,7 +1301,15 @@ function renderModelList(box, items, { toggle, bulk }) {
     return !norm || filterNorm(item.label + ' ' + (item.sub || '')).includes(norm);
   };
   const count = el('span', 'dmp-status');
+  const showBtn = el('button', 'dmp-btn sec');
+  const hideBtn = el('button', 'dmp-btn sec');
+  const syncBulkLabels = () => {
+    const filtered = (panelState.provSearch || '').trim() !== '';
+    showBtn.textContent = filtered ? '\u663e\u793a\u7b5b\u9009\u7ed3\u679c' : '\u5168\u90e8\u663e\u793a';
+    hideBtn.textContent = filtered ? '\u9690\u85cf\u7b5b\u9009\u7ed3\u679c' : '\u5168\u90e8\u9690\u85cf';
+  };
   const fill = () => {
+    syncBulkLabels();
     listEl.replaceChildren();
     const visible = items.filter(item => matches(item) && (!panelState.provOnlyShown || item.on));
     for (const item of visible) {
@@ -1256,12 +1329,16 @@ function renderModelList(box, items, { toggle, bulk }) {
     count.textContent = '\u5df2\u663e\u793a ' + items.filter(item => item.on).length + ' / ' + items.length;
   };
   search.addEventListener('input', () => { panelState.provSearch = search.value; fill(); });
-  const showBtn = el('button', 'dmp-btn sec', '\u663e\u793a\u7b5b\u9009\u7ed3\u679c');
   showBtn.addEventListener('click', () => bulk(items.filter(matches).map(item => item.key), true, err));
-  const hideBtn = el('button', 'dmp-btn sec', '\u9690\u85cf\u7b5b\u9009\u7ed3\u679c');
   hideBtn.addEventListener('click', () => bulk(items.filter(matches).map(item => item.key), false, err));
   const only = el('button', 'dmp-chip-btn' + (panelState.provOnlyShown ? ' dmp-on' : ''), '\u53ea\u770b\u5df2\u663e\u793a');
-  only.addEventListener('click', () => { panelState.provOnlyShown = !panelState.provOnlyShown; fill(); });
+  only.setAttribute('aria-pressed', String(!!panelState.provOnlyShown));
+  only.addEventListener('click', () => {
+    panelState.provOnlyShown = !panelState.provOnlyShown;
+    only.classList.toggle('dmp-on', panelState.provOnlyShown);
+    only.setAttribute('aria-pressed', String(panelState.provOnlyShown));
+    fill();
+  });
   tools.appendChild(search);
   tools.appendChild(showBtn);
   tools.appendChild(hideBtn);
@@ -1283,6 +1360,7 @@ function renderProvAdd(box) {
   form.appendChild(el('label', 'dmp-lab', 'API Key'));
   const key = el('input', '');
   key.type = 'password';
+  key.placeholder = 'sk-...';
   form.appendChild(key);
   const err = el('div', 'dmp-err');
   const submit = el('button', 'dmp-btn', '\u8fde\u63a5');
@@ -1302,10 +1380,18 @@ function renderProvAdd(box) {
     afterCatalogEdit('\u5df2\u8fde\u63a5 ' + res.provider.name + '\uff0c\u6b63\u5728\u5237\u65b0\u2026', true);
   };
   submit.addEventListener('click', connect);
+  url.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      if (key.value.trim()) connect();
+      else key.focus();
+    }
+  });
   key.addEventListener('keydown', event => { if (event.key === 'Enter') connect(); });
   form.appendChild(submit);
   form.appendChild(err);
+  form.appendChild(el('div', 'dmp-status', '\u81ea\u52a8\u63a2\u6d4b OpenAI Chat / Responses / Anthropic \u63a5\u53e3\u683c\u5f0f\u5e76\u62c9\u53d6\u6a21\u578b\u5217\u8868\uff1bAPI Key \u4ec5\u4fdd\u5b58\u5728\u672c\u5730\u3002'));
   box.appendChild(form);
+  setTimeout(() => { try { url.focus(); } catch {} }, 0);
 }
 
 function renderProvDetail(box, provider) {
@@ -1332,7 +1418,7 @@ function renderProvDetail(box, provider) {
     setTimeout(() => { try { input.focus(); input.select(); } catch {} }, 0);
   } else {
     const name = el('span', 'dmp-pd-name', provider.name);
-    name.title = '\u70b9\u51fb\u91cd\u547d\u540d';
+    name.title = '\u70b9\u51fb\u91cd\u547d\u540d\u4f9b\u5e94\u5546';
     name.addEventListener('click', () => { panelState.provEdit = 'rename'; renderProviders(); });
     head.appendChild(name);
   }
@@ -1368,24 +1454,30 @@ function renderProvDetail(box, provider) {
     keyInput.type = 'password';
     keyInput.placeholder = '\u65b0 API Key';
     const saveKey = async () => {
+      const nextKey = keyInput.value.trim();
+      if (!nextKey) { panelState.provError = '\u8bf7\u8f93\u5165\u65b0\u7684 API Key'; renderProviders(); return; }
       panelState.provEdit = null;
-      const res = await pickerPost('/picker/providers/update', { id: provider.id, apiKey: keyInput.value });
+      panelState.provError = '';
+      const res = await pickerPost('/picker/providers/update', { id: provider.id, apiKey: nextKey });
       if (res.error) panelState.provError = res.message;
       await refreshProviders();
     };
     keyInput.addEventListener('keydown', event => {
       event.stopPropagation();
       if (event.key === 'Enter') saveKey();
-      else if (event.key === 'Escape') { panelState.provEdit = null; renderProviders(); }
+      else if (event.key === 'Escape') { panelState.provEdit = null; panelState.provError = ''; renderProviders(); }
     });
     const saveBtn = el('button', 'dmp-btn sec', '\u4fdd\u5b58');
     saveBtn.addEventListener('click', saveKey);
+    const cancelBtn = el('button', 'dmp-btn sec', '\u53d6\u6d88');
+    cancelBtn.addEventListener('click', () => { panelState.provEdit = null; panelState.provError = ''; renderProviders(); });
     acts.appendChild(keyInput);
     acts.appendChild(saveBtn);
+    acts.appendChild(cancelBtn);
     setTimeout(() => { try { keyInput.focus(); } catch {} }, 0);
   } else {
     const keyBtn = el('button', 'dmp-btn sec', '\u66f4\u6362 Key');
-    keyBtn.addEventListener('click', () => { panelState.provEdit = 'key'; renderProviders(); });
+    keyBtn.addEventListener('click', () => { panelState.provEdit = 'key'; panelState.provError = ''; renderProviders(); });
     acts.appendChild(keyBtn);
   }
   const del = el('button', 'dmp-btn danger', panelState.provConfirmDelete ? '\u786e\u8ba4\u5220\u9664' : '\u5220\u9664');
@@ -1401,6 +1493,11 @@ function renderProvDetail(box, provider) {
     afterCatalogEdit('\u5df2\u5220\u9664\u4f9b\u5e94\u5546\uff0c\u6b63\u5728\u5237\u65b0\u2026', true);
   });
   acts.appendChild(del);
+  if (panelState.provConfirmDelete) {
+    const cancelDel = el('button', 'dmp-btn sec', '\u53d6\u6d88');
+    cancelDel.addEventListener('click', () => { panelState.provConfirmDelete = false; renderProviders(); });
+    acts.appendChild(cancelDel);
+  }
   head.appendChild(acts);
   box.appendChild(head);
   const urlLine = el('div', 'dmp-pd-url', provider.baseUrl || '');
@@ -1447,7 +1544,10 @@ function renderProvDetail(box, provider) {
 }
 
 function renderDevinDetail(box, devins) {
-  box.appendChild(el('div', 'dmp-pd-head', 'Devin \u81ea\u5e26\u6a21\u578b'));
+  const head = el('div', 'dmp-pd-head');
+  head.appendChild(el('span', 'dmp-pd-title', 'Devin \u81ea\u5e26\u6a21\u578b'));
+  head.appendChild(el('span', 'dmp-status', '\u7ba1\u7406\u5728\u5355\u6a21\u578b\u4e0e Fusion \u4e2d\u663e\u793a\u7684\u539f\u751f\u6a21\u578b'));
+  box.appendChild(head);
   const items = devins.cards.map(card => ({
     key: card.prefKey, on: !devins.hidden.has(card.prefKey),
     label: (prefAlias(card.prefKey) || card.name) + (card.version ? ' ' + card.version : '') + (card.variant ? ' ' + card.variant : ''),
@@ -1533,7 +1633,7 @@ function buildCard(card, index, located) {
   else if (!costTag && family.free) top.appendChild(el('span', 'dmp-free', '免费'));
   if (card.favorite) top.appendChild(el('span', 'dmp-star', '★'));
   const chip = el('button', 'dmp-prov', family.providerName || 'Devin');
-  chip.title = card.families.length > 1 ? '切换供应商' : '';
+  chip.title = card.families.length > 1 ? '点击切换供应商' : '';
   top.appendChild(chip);
   node.appendChild(top);
 
@@ -1647,12 +1747,16 @@ function buildFusionCard(card, index, located, state) {
   const costTag = costVariant?.native === true ? costTagFor(located, costVariant.model) : null;
   const price = costVariant?.native === true ? priceInfo(costVariant.model) : null;
 
+  const isLead = slots.lead && card.variants.some(variant => variant.ref.kind === slots.lead.kind && variant.ref.uid === slots.lead.uid);
+  const isSidekick = slots.sidekick && card.variants.some(variant => variant.ref.kind === slots.sidekick.kind && variant.ref.uid === slots.sidekick.uid);
   const top = el('div', 'dmp-top');
   top.appendChild(el('span', 'dmp-idx', String(index + 1).padStart(2, '0')));
   const dot = el('span', 'dmp-dot');
   dot.style.background = VENDORS[card.vendor] || VENDORS.other;
   top.appendChild(dot);
   if (costTag && (!price || isFreeTag(costTag, costVariant.free))) appendCostTag(top, costTag, costVariant.free);
+  if (isLead) top.appendChild(el('span', 'dmp-role', '主模型'));
+  else if (isSidekick) top.appendChild(el('span', 'dmp-role dmp-role-sk', '辅助'));
   if (card.favorite) top.appendChild(el('span', 'dmp-star', '★'));
   top.appendChild(el('span', 'dmp-prov', card.providerName || 'Devin'));
   node.appendChild(top);
@@ -1727,9 +1831,30 @@ function slotChip(slot, label) {
   if (ref) {
     const cand = [...(lastState?.fusionCandidates?.leads || []), ...(lastState?.fusionCandidates?.sidekicks || [])]
       .find(item => item.ref.kind === ref.kind && item.ref.uid === ref.uid);
-    const parsed = cardName(cand?.label || ref.uid);
-    const eff = cand?.effort != null ? ' ' + effortLabel(cand.effort) : '';
-    text = parsed.name + (parsed.version ? ' ' + parsed.version : '') + eff;
+    const activeToggles = [];
+    if (ref.kind === 'native') {
+      const models = panelState?.located?.host?.visibleModelConfigs || [];
+      const nativeEntry = models.find(m => m.modelUid === ref.uid);
+      if (nativeEntry?.familyMetadata) {
+        const siblings = nativeEntry.familyUid
+          ? models.filter(m => m.familyUid === nativeEntry.familyUid)
+          : [nativeEntry];
+        const varying = new Map();
+        for (const sib of siblings) {
+          for (const [key, val] of dimRoles(sib.familyMetadata).toggles) {
+            const rec = varying.get(key) || { zero: false, nonzero: false };
+            if ((Number(val.order) || 0) === 0) rec.zero = true; else rec.nonzero = true;
+            varying.set(key, rec);
+          }
+        }
+        for (const [key, val] of dimRoles(nativeEntry.familyMetadata).toggles) {
+          const rec = varying.get(key);
+          if (rec?.zero && rec?.nonzero && Number(val.order) > 0) activeToggles.push(toggleLabel(key));
+        }
+      }
+    }
+    text = [fusionSlotText(cand, ref), ...activeToggles].filter(Boolean).join(' ') || ref.uid;
+    chip.title = cand?.label || ref.uid;
   }
   chip.appendChild(el('span', '', text));
   chip.addEventListener('click', () => { panelState.activeSlot = slot; rerenderGrid(); });
@@ -1825,13 +1950,19 @@ function rerenderGrid() {
   renderFoot();
 }
 
-// Footer: status/hint, then the fusion apply button.
+function defaultFootHint(mode) {
+  if (mode === 'fusion') return '选择主模型与辅助模型后点击右侧按钮启用 · 右键可排序/收藏';
+  if (mode === 'providers') return '开关实时同步到卡片 · 点击供应商名称可重命名';
+  return '直接输入筛选 · 拖拽排序 · 右键管理 · Alt+点击打开经典菜单';
+}
+
+// Footer: status/hint on the left, optional fusion error + apply button on the right.
 function renderFoot() {
   const foot = panel?.querySelector('.dmp-foot');
   if (!foot || !panelState) return;
   while (foot.firstChild) foot.removeChild(foot.firstChild);
-  foot.appendChild(el('span', panelState.status ? 'dmp-status' : '',
-    panelState.status || '输入即可筛选 · Alt+点击打开原生菜单'));
+  foot.appendChild(el('span', 'dmp-foot-msg' + (panelState.status ? ' dmp-status' : ''),
+    panelState.status || defaultFootHint(panelState.mode)));
   if (panelState.mode === 'fusion') renderFusionFooter();
 }
 
@@ -1848,21 +1979,22 @@ function renderFusionFooter() {
   apply.disabled = !(slots.lead && slots.sidekick);
   apply.addEventListener('click', async () => {
     err.textContent = '';
+    if (err.parentNode === foot) err.remove();
     apply.disabled = true;
     saveDraft();
     try {
       const result = await postFusion({ lead: slots.lead, sidekick: slots.sidekick,
         currentUid: panelState.value });
-      if (result.error === 'same_model') { err.textContent = '两个槽位不能使用同一模型'; apply.disabled = false; foot.prepend(err); return; }
-      if (result.error === 'invalid_ref') { err.textContent = '所选模型不可用'; apply.disabled = false; foot.prepend(err); return; }
+      if (result.error === 'same_model') { err.textContent = '两个槽位不能使用同一模型'; apply.disabled = false; foot.insertBefore(err, apply); return; }
+      if (result.error === 'invalid_ref') { err.textContent = '所选模型不可用'; apply.disabled = false; foot.insertBefore(err, apply); return; }
       if (result.uid) { selectModel(result.uid); return; }
       err.textContent = '本地服务错误'; apply.disabled = false;
     } catch {
       err.textContent = '本地服务未就绪'; apply.disabled = false;
     }
-    foot.prepend(err);
+    foot.insertBefore(err, apply);
   });
-  foot.prepend(apply);
+  foot.appendChild(apply);
 }
 
 // Bottom edge of the window's title bar: clicks on a drag region never reach
@@ -1942,7 +2074,7 @@ function openPanel(trigger, located) {
     btnProv.className = mode === 'providers' ? 'dmp-on' : '';
     panel.classList.toggle('dmp-mode-prov', mode === 'providers');
     slotRow.style.display = mode === 'fusion' ? '' : 'none';
-    if (mode === 'providers') refreshProviders();
+    if (mode === 'providers') { refreshProviders(); renderFoot(); }
     else rerenderGrid();
   };
   panelState.setMode = setMode;
@@ -1952,11 +2084,11 @@ function openPanel(trigger, located) {
   seg.appendChild(btnSingle); seg.appendChild(btnFusion); seg.appendChild(btnProv);
   toolbar.appendChild(seg);
   const filter = el('input', 'dmp-filter');
-  filter.placeholder = '输入以筛选';
+  filter.placeholder = '搜索模型名称、供应商或 ID…';
   filter.addEventListener('input', () => { panelState.filter = filter.value; rerenderGrid(); });
   toolbar.appendChild(filter);
   const classicBtn = el('button', 'dmp-classic', '经典选择器');
-  classicBtn.title = '切换到 Devin 原生选择器（Alt+点击）';
+  classicBtn.title = '切换回 Devin 原生下拉菜单（Alt+点击模型按钮可临时打开）';
   classicBtn.addEventListener('click', event => {
     event.stopPropagation();
     openClassic(panelState?.trigger || trigger);
@@ -1975,7 +2107,7 @@ function openPanel(trigger, located) {
   });
   panel.appendChild(grid);
   panel.appendChild(provTab);
-  const foot = el('div', 'dmp-foot', '输入即可筛选 · Alt+点击打开原生菜单');
+  const foot = el('div', 'dmp-foot');
   panel.appendChild(foot);
   document.body.appendChild(panel);
   void fetchState().then(() => {
@@ -2096,8 +2228,8 @@ function openClassic(trigger) {
 function nativeSwitch(trigger) {
   const btn = el('button', 'dmp-native-switch', '卡片');
   btn.type = 'button';
-  btn.title = '卡片选择器';
-  btn.setAttribute('aria-label', '卡片选择器');
+  btn.title = '切换回卡片选择器';
+  btn.setAttribute('aria-label', '切换回卡片选择器');
   btn.setAttribute('data-dmp-native-switch', '');
   btn.__dmpTrigger = trigger;
   btn.addEventListener('click', event => {

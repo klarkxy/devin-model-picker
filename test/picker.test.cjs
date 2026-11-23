@@ -100,6 +100,33 @@ test('groupFusion keeps BYOK effort variants in one family card', () => {
   assert.deepEqual(swe.cells.map(cell => cell.label), ['H'], 'native effort name comes from familyMetadata');
 });
 
+test('groupFusion keeps the pre-suffix prefKey for effort-only BYOK families', () => {
+  const { buildCatalog } = require('../src/catalog.cjs');
+  const { candidates } = require('../src/picker-api.cjs');
+  const config = { providers: [{ id: 'p', name: 'Legacy',
+    models: [{ id: 'legacy-model', label: 'Legacy Model', efforts: ['high'] }] }] };
+  const leads = candidates(buildCatalog(config), config).leads.filter(c => c.ref.kind === 'byok');
+  assert.equal(leads.length, 1, 'a single high-effort route, no null default');
+  const cards = picker.groupFusion(leads, new Map());
+  const byok = cards.filter(card => card.byok);
+  assert.equal(byok.length, 1);
+  const card = byok[0];
+  assert.equal(card.familyLabel, 'Legacy Model', 'display title drops the effort word');
+  const oldKey = 'legacy||model high';
+  assert.equal(card.prefKey, picker.cardKey(picker.cardName('Legacy Model High')),
+    'prefKey keeps the pre-strip naming basis so stored prefs still resolve');
+  assert.equal(card.prefKey, oldKey);
+  const prefs = { order: [oldKey], favorites: [oldKey], hidden: [oldKey], aliases: { [oldKey]: '旧别名' } };
+  const ranked = picker.arrangeCards([{ prefKey: 'other||', cardKey: 'b:other', byok: true, variants: [] }, card],
+    { order: [oldKey], favorites: [], hidden: [], aliases: {} }, true);
+  assert.equal(ranked[0].prefKey, oldKey, 'order resolves the old key');
+  const arranged = picker.arrangeCards([card], prefs, true);
+  assert.equal(arranged[0].favorite, true, 'favorites resolve the old key');
+  assert.equal(arranged[0].hidden, false, 'BYOK cards stay exempt from prefs.hidden');
+  assert.equal(picker.hidesCard({ prefKey: oldKey, byok: false }, new Set(prefs.hidden)), true,
+    'the restored key still hides a non-BYOK card');
+});
+
 test('prefillFusion parses dmp slots and official fusion uids', () => {
   const state = { fusionSlots: { a: { lead: { kind: 'byok', uid: 'dmp-1' }, sidekick: { kind: 'native', uid: 'swe-2-high' } } } };
   const candidates = { leads: [{ ref: { kind: 'native', uid: 'claude-opus-5-5-high' } }],
@@ -576,4 +603,57 @@ test('verify-classic.py launches default Playwright Chromium with an env overrid
   assert.ok(source.includes('pw.chromium.launch(**chromium_launch_kwargs())'),
     'launch uses kwargs so a missing Windows path does not crash');
   assert.ok(source.includes('return {}'), 'no override and no Windows cache → default Chromium');
+});
+
+test('groupFusion assigns accurate vendor keys instead of hardcoding windsurf/other', () => {
+  const cards = picker.groupFusion([
+    { ref: { kind: 'native', uid: 'claude-opus-5-5-medium' }, label: 'Claude Opus 5.5 Medium', providerName: 'Devin', familyLabel: 'Claude Opus 5.5', familyKey: 'claude-opus-5-5' },
+    { ref: { kind: 'native', uid: 'gpt-5-6-sol-low' }, label: 'GPT-5.6 Sol Low', providerName: 'Devin', familyLabel: 'GPT-5.6 Sol', familyKey: 'gpt-5.6-sol' },
+    { ref: { kind: 'native', uid: 'gemini-3-8-flash-low' }, label: 'Gemini 3.8 Flash Low', providerName: 'Devin', familyLabel: 'Gemini 3.8 Flash', familyKey: 'gemini-3-8-flash' },
+    { ref: { kind: 'byok', uid: 'dmp-p-glm-1' }, label: 'Relay · GLM-5.3 High', providerName: 'Relay', effort: 'High', familyLabel: 'GLM-5.3', familyKey: 'byok:p:glm-5-3' },
+    { ref: { kind: 'native', uid: 'swe-2-high' }, label: 'SWE-2 High', providerName: 'Devin', familyLabel: 'SWE-2', familyKey: 'swe-2' },
+  ]);
+  const byName = Object.fromEntries(cards.map(c => [c.familyLabel, c.vendor]));
+  assert.equal(byName['Claude Opus 5.5'], 'anthropic');
+  assert.equal(byName['GPT-5.6 Sol'], 'openai');
+  assert.equal(byName['Gemini 3.8 Flash'], 'google');
+  assert.equal(byName['GLM-5.3'], 'zai');
+  assert.equal(byName['SWE-2'], 'windsurf');
+});
+
+test('fusion slot text strips a BYOK effort suffix before appending the compact label', () => {
+  const ref = { kind: 'byok', uid: 'dmp-p-reasoner-high' };
+  assert.equal(picker.fusionSlotText(
+    { familyLabel: 'DeepSeek Reasoner High', label: 'Magpie · DeepSeek Reasoner High', effort: 'high' }, ref),
+    'DeepSeek Reasoner H');
+  assert.equal(picker.fusionSlotText(
+    { familyLabel: 'DeepSeek Reasoner', effort: 'high' }, ref),
+    'DeepSeek Reasoner H');
+  assert.equal(picker.fusionSlotText(
+    { label: 'Magpie · DeepSeek Reasoner High', effort: 'high' }, ref),
+    'DeepSeek Reasoner H', 'label fallback also strips High before appending H');
+  assert.equal(picker.fusionSlotText(
+    { familyLabel: 'Claude Opus 5.5', effort: 'High' }, { kind: 'native', uid: 'claude-opus-5-5-high' }),
+    'Opus 5.5 H');
+  const source = fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8');
+  const chip = source.slice(source.indexOf('function slotChip'), source.indexOf('function rerenderGrid'));
+  assert.ok(chip.includes('fusionSlotText'), 'slot chips use fusionSlotText');
+  assert.ok(!chip.includes('parsed.name'), 'slot chips no longer compose cardName + effort inline');
+});
+
+test('clipboardStatus reports success only after writeText resolves', async () => {
+  const ok = await picker.clipboardStatus(async uid => { assert.equal(uid, 'dmp-1'); }, 'dmp-1');
+  assert.deepEqual(ok, { ok: true, text: '已复制模型 ID：dmp-1' });
+  const missing = await picker.clipboardStatus(undefined, 'dmp-1');
+  assert.equal(missing.ok, false);
+  assert.equal(missing.text, '复制失败');
+  const rejected = await picker.clipboardStatus(async () => { throw new Error('denied'); }, 'dmp-1');
+  assert.equal(rejected.ok, false);
+  const syncThrow = await picker.clipboardStatus(() => { throw new Error('nope'); }, 'dmp-1');
+  assert.equal(syncThrow.ok, false);
+  const source = fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8');
+  const action = source.slice(source.indexOf("label: '复制模型 ID'"), source.indexOf("label: '管理供应商"));
+  assert.ok(action.includes('clipboardStatus'));
+  assert.ok(action.includes('.then'), 'toast waits for clipboardStatus');
+  assert.ok(!action.includes("?.catch?.(() => {})"), 'failed writes are no longer swallowed before the toast');
 });

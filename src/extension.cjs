@@ -378,11 +378,18 @@ async function activate(context) {
   };
   // Disabling in the extension manager restarts the extension host and never runs
   // the disable command; without this the native CLI keeps pointing at a runtime
-  // that no longer starts. A plain reload or quit keeps the shared settings.
+  // that no longer starts. A plain reload or quit keeps the shared settings and
+  // the workbench injection. Panel disable must also remove the injection so the
+  // card picker does not remain after the backend is gone.
   restoreOnHostDisable = async () => {
     if (!isHostDisabled({ storageRoot: root })) return;
     await restoreOwnedSettings();
+    try { removeInjection({ appRoot: vscode.env.appRoot, log }); } catch { log('injection-remove-failed'); }
     log('host-disabled-settings-restored');
+    // Every window sharing this install keeps its already-loaded renderer
+    // listeners until it reloads — disk changed only says which window won the
+    // removal, not whether this window still runs the picker.
+    void vscode.commands.executeCommand('workbench.action.reloadWindow');
   };
   context.subscriptions.push(vscode.commands.registerCommand('devinModelPicker.disable', run(disable)));
   context.subscriptions.push(vscode.commands.registerCommand('devinModelPicker.reinject', run(async () => {
@@ -402,7 +409,7 @@ async function activate(context) {
   })));
   const statusBar = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 20);
   if (statusBar) {
-    statusBar.text = 'Model Picker'; statusBar.tooltip = '管理 BYOK 供应商与模型';
+    statusBar.text = 'Model Picker'; statusBar.tooltip = 'Devin Model Picker — 管理 BYOK 供应商与模型';
     statusBar.command = 'devinModelPicker.openSettings'; statusBar.show(); context.subscriptions.push(statusBar);
   }
   const onConfigChanged = () => {
