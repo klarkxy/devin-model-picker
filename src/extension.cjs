@@ -384,13 +384,12 @@ async function activate(context) {
   restoreOnHostDisable = async () => {
     if (!isHostDisabled({ storageRoot: root })) return;
     await restoreOwnedSettings();
-    let removed;
-    try { removed = removeInjection({ appRoot: vscode.env.appRoot, log }); } catch { log('injection-remove-failed'); }
+    try { removeInjection({ appRoot: vscode.env.appRoot, log }); } catch { log('injection-remove-failed'); }
     log('host-disabled-settings-restored');
-    // Disk cleanup cannot detach the already-loaded renderer listeners; reload
-    // so this window also drops the card picker. changed=false means our tag
-    // was never on disk here, so reloading would gain nothing.
-    if (removed?.changed === true) void vscode.commands.executeCommand('workbench.action.reloadWindow');
+    // Every window sharing this install keeps its already-loaded renderer
+    // listeners until it reloads — disk changed only says which window won the
+    // removal, not whether this window still runs the picker.
+    void vscode.commands.executeCommand('workbench.action.reloadWindow');
   };
   context.subscriptions.push(vscode.commands.registerCommand('devinModelPicker.disable', run(disable)));
   context.subscriptions.push(vscode.commands.registerCommand('devinModelPicker.reinject', run(async () => {

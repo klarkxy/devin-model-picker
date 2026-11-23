@@ -145,15 +145,15 @@ test('deactivate on a host-panel disable restores settings, removes the injectio
   assert.notEqual(saved.enabled, false, 'panel disable does not flip config.enabled');
 });
 
-test('deactivate on a host-panel disable without disk changes does not reload', async t => {
+test('deactivate on a host-panel disable without disk changes still reloads the current window', async t => {
   const f = fixture(t, { removeResult: { changed: false } });
   await f.activate(f.context);
   await f.settle();
   f.setHostDisabled(true);
   await f.deactivate();
   assert.equal(f.calls.remove.length, 1);
-  assert.ok(!f.calls.executed.includes('workbench.action.reloadWindow'),
-    'nothing was removed from this install — no pointless reload');
+  assert.ok(f.calls.executed.includes('workbench.action.reloadWindow'),
+    'a second window removed nothing from disk but still runs the injected listeners');
 });
 
 test('deactivate on reload keeps settings and the injection', async t => {
