@@ -15,12 +15,15 @@ npm run package   # node scripts/package.cjs → devin-model-picker-<version>.vs
 - `src/runtime/` — spawned backend (`backend.cjs`, port 39852), `bridge.cjs`, `ls-injection.cjs`, `acp-injection.cjs`, `host-catalog.cjs`, `native-models.cjs`, `picker-refresh.cjs`, `backend-env.cjs`
 - `src/protocol/` — wire/chat/responses/anthropic codecs
 - `src/catalog.cjs` — BYOK routes + `fusion-dmp-a`/`fusion-dmp-b` slots, `resolveAssignment`, `collectNativeModels`, `discoverOfficialRoles`
+- `src/byok-ops.cjs` — shared BYOK provider CRUD, endpoint format probing, discovery merge, and bulk enable/disable ops
 - `src/models-dev.cjs` — models.dev index/cache/merge (extension host side)
-- `src/picker-api.cjs` — `/picker/state`, `/picker/fusion` (Origin `vscode-file://vscode-app` only)
+- `src/picker-api.cjs` — `/picker/state`, `/picker/fusion`, `/picker/providers*`, `/picker/models/*` (Origin `vscode-file://vscode-app` only)
 - `src/inject.cjs` — workbench.html script injection + product.json checksums
 - `src/settings.cjs` — settings webview (vanilla JS, strict CSP)
+- `src/update.cjs` — GitHub Releases self-update check, SHA-256 + VSIX manifest verification, in-place install
 - `src/lifecycle/` — owned-settings receipt restore + `vscode:uninstall` hook
-- `media/picker.js` — placeholder renderer script (real card UI is a later milestone)
+- `media/picker.js` — injected renderer card picker (Single-Model / Fusion / Providers tabs, drag-and-drop, favorites, aliases, classic picker toggle)
+- `README.md`, `README.zh-CN.md`, `docs/images/` — bilingual user documentation and Playwright-captured screenshots (`dev/capture-docs.py`)
 
 ## Invariants
 

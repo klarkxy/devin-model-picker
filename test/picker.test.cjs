@@ -577,3 +577,19 @@ test('verify-classic.py launches default Playwright Chromium with an env overrid
     'launch uses kwargs so a missing Windows path does not crash');
   assert.ok(source.includes('return {}'), 'no override and no Windows cache → default Chromium');
 });
+
+test('groupFusion assigns accurate vendor keys instead of hardcoding windsurf/other', () => {
+  const cards = picker.groupFusion([
+    { ref: { kind: 'native', uid: 'claude-opus-5-5-medium' }, label: 'Claude Opus 5.5 Medium', providerName: 'Devin', familyLabel: 'Claude Opus 5.5', familyKey: 'claude-opus-5-5' },
+    { ref: { kind: 'native', uid: 'gpt-5-6-sol-low' }, label: 'GPT-5.6 Sol Low', providerName: 'Devin', familyLabel: 'GPT-5.6 Sol', familyKey: 'gpt-5.6-sol' },
+    { ref: { kind: 'native', uid: 'gemini-3-8-flash-low' }, label: 'Gemini 3.8 Flash Low', providerName: 'Devin', familyLabel: 'Gemini 3.8 Flash', familyKey: 'gemini-3-8-flash' },
+    { ref: { kind: 'byok', uid: 'dmp-p-glm-1' }, label: 'Relay · GLM-5.3 High', providerName: 'Relay', effort: 'High', familyLabel: 'GLM-5.3', familyKey: 'byok:p:glm-5-3' },
+    { ref: { kind: 'native', uid: 'swe-2-high' }, label: 'SWE-2 High', providerName: 'Devin', familyLabel: 'SWE-2', familyKey: 'swe-2' },
+  ]);
+  const byName = Object.fromEntries(cards.map(c => [c.familyLabel, c.vendor]));
+  assert.equal(byName['Claude Opus 5.5'], 'anthropic');
+  assert.equal(byName['GPT-5.6 Sol'], 'openai');
+  assert.equal(byName['Gemini 3.8 Flash'], 'google');
+  assert.equal(byName['GLM-5.3'], 'zai');
+  assert.equal(byName['SWE-2'], 'windsurf');
+});

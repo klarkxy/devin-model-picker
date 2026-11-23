@@ -402,7 +402,7 @@ async function activate(context) {
   })));
   const statusBar = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Right ?? 2, 20);
   if (statusBar) {
-    statusBar.text = 'Model Picker'; statusBar.tooltip = '管理 BYOK 供应商与模型';
+    statusBar.text = 'Model Picker'; statusBar.tooltip = 'Devin Model Picker — 管理 BYOK 供应商与模型';
     statusBar.command = 'devinModelPicker.openSettings'; statusBar.show(); context.subscriptions.push(statusBar);
   }
   const onConfigChanged = () => {
