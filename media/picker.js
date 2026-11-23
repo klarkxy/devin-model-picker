@@ -894,6 +894,7 @@ function setView(next) {
     data.view = view;
     localStorage.setItem(LS_KEY, JSON.stringify(data));
   } catch {}
+  scheduleBind(); // the adjacent switch appears/disappears with the view
 }
 
 // Panel ----------------------------------------------------------------------
@@ -1898,10 +1899,15 @@ function positionPanel(trigger) {
   panel.style.left = left + 'px';
   // Anchor by the edge facing the trigger — an above-opened panel pins its
   // bottom 8px over the trigger regardless of how tall the content actually
-  // is (maxH only bounds the top, which can then never cross minTop).
-  if (above) {
+  // is. Only when the tallest allowed panel still fits under minTop, though:
+  // maxH is floored at 120, so a short window can exceed the space above and
+  // the top must be pinned at minTop instead.
+  if (above && rect.top - 8 - maxH >= minTop) {
     panel.style.top = 'auto';
     panel.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+  } else if (above) {
+    panel.style.bottom = 'auto';
+    panel.style.top = minTop + 'px';
   } else {
     panel.style.bottom = 'auto';
     panel.style.top = (rect.bottom + 8) + 'px';
@@ -2083,9 +2089,10 @@ function openClassic(trigger) {
   try { trigger.dispatchEvent(new MouseEvent('click', init)); } catch {}
 }
 
-// The "卡片" entry injected at the top of a proven model menu — the only way
-// back from classic view. Click restores the cards view and opens the panel in
-// the same gesture.
+// The "卡片" entry: always injected at the top of a proven model menu; next to
+// a bound trigger it exists only in classic view — a visible way back when the
+// native menu owns the composer. Click restores the cards view and opens the
+// panel in the same gesture.
 function nativeSwitch(trigger) {
   const btn = el('button', 'dmp-native-switch', '卡片');
   btn.type = 'button';
@@ -2156,6 +2163,19 @@ function bind() {
     if (!located) continue;
     button.setAttribute('data-dmp-bound', '');
     button.__dmpOpenChange = openChangeFor(button, located) || undefined;
+  }
+  // The adjacent switch is the classic view's visible way back — it must exist
+  // only while the native menu owns the trigger, never in cards view.
+  for (const button of document.querySelectorAll('button[aria-haspopup="menu"][data-dmp-bound]')) {
+    const near = sibling => sibling?.hasAttribute?.('data-dmp-native-switch');
+    if (view === 'classic' && !near(button.previousElementSibling) && !near(button.nextElementSibling)) {
+      button.parentElement?.insertBefore(nativeSwitch(button), button.nextSibling);
+    }
+  }
+  if (view !== 'classic') {
+    for (const sw of document.querySelectorAll('[data-dmp-native-switch]')) {
+      if (!sw.closest('[role="menu"]')) sw.remove();
+    }
   }
   bindMenus();
 }

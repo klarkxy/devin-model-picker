@@ -45,11 +45,11 @@ with sync_playwright() as pw:
     menu = '[data-native-menu]'
     get_view = lambda: page.evaluate("JSON.parse(localStorage.getItem('devin-model-picker:v1')||'{}').view||'missing'")
 
-    # --- no adjacent entry next to the trigger; menu switches only ---
+    # --- no adjacent entry next to the trigger while in cards view (default) ---
     page.wait_for_timeout(300)
     outside = page.evaluate("""[...document.querySelectorAll('[data-dmp-native-switch]')]
       .filter(el => !el.closest('[role=menu]')).length""")
-    check('no card-switch outside menus', outside == 0, str(outside))
+    check('no card-switch outside menus (cards view)', outside == 0, str(outside))
 
     # --- cards mode: trigger opens our panel ---
     page.click(trigger)
@@ -184,6 +184,23 @@ with sync_playwright() as pw:
     page.wait_for_timeout(300)
     check('menu closed after restore', page.locator(menu).count() == 0)
 
+    # --- classic view gets an adjacent switch back as the visible way out ---
+    page.locator('.dmp-classic').click()
+    page.wait_for_selector(menu, timeout=3000)
+    check('classic persisted again', get_view() == 'classic', get_view())
+    page.wait_for_timeout(300)
+    check('adjacent switch appears in classic view',
+        page.locator('#composer [data-dmp-native-switch]').count() == 1,
+        str(page.locator('#composer [data-dmp-native-switch]').count()))
+    page.locator('#composer [data-dmp-native-switch]').click()
+    page.wait_for_selector(panel, timeout=3000)
+    check('adjacent switch restores cards + opens panel',
+        page.locator(panel).count() == 1 and get_view() == 'cards', get_view())
+    page.wait_for_timeout(300)
+    outside = page.evaluate("""[...document.querySelectorAll('[data-dmp-native-switch]')]
+      .filter(el => !el.closest('[role=menu]')).length""")
+    check('adjacent switch gone in cards view', outside == 0, str(outside))
+
     # --- the in-menu switch opens the panel directly ---
     page.keyboard.press('Escape')
     page.wait_for_timeout(300)
@@ -235,6 +252,16 @@ with sync_playwright() as pw:
     page.wait_for_selector(panel + '.dmp-open', timeout=3000)
     check('in-menu switch restores panel (onClose path)', page.locator(panel + '.dmp-open').count() == 1)
     check('menu closed via onClose', page.locator(menu).count() == 0)
+
+    # --- short window: the panel top never slips under the title-bar floor.
+    # The composer trigger ends up with < 120px of space above, so the above-
+    # branch must pin top=minTop (44 in this harness) instead of anchoring the
+    # bottom and letting the 120px maxH floor lift the top past the title bar.
+    page.set_viewport_size({'width': 1000, 'height': 220})
+    page.wait_for_timeout(400)
+    top = page.evaluate("document.querySelector('.dmp-panel').getBoundingClientRect().top")
+    check('panel top honors title-bar floor', top >= 43, 'top=%s' % top)
+    page.screenshot(path=SHOTS + '/panel-min-top.png', clip=page.locator(panel).bounding_box())
 
     check('no console errors', len(errors) == 0, '; '.join(errors[:5]))
     browser.close()
