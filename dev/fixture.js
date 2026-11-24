@@ -92,6 +92,19 @@
     let slotToggle = 'a';
     const effectiveState = window.DMP_STATE_OVERRIDE || state;
     effectiveState.byok = effectiveState.byok || {};
+    const leadUids = new Set((effectiveState.fusionCandidates?.leads || [])
+      .filter(item => item?.ref?.kind === 'native').map(item => item.ref.uid));
+    const vmcByUid = new Map(visibleModelConfigs.map(item => [item.modelUid, item]));
+    for (const sidekick of effectiveState.fusionCandidates?.sidekicks || []) {
+      if (sidekick?.ref?.kind !== 'native' || Array.isArray(sidekick.officialLeads)) continue;
+      const officialLeads = [];
+      for (const leadUid of leadUids) {
+        if (leadUid === sidekick.ref.uid) continue;
+        const router = vmcByUid.get('fusion-' + leadUid + '-sidekick-' + sidekick.ref.uid);
+        if (router && router.disabled !== true) officialLeads.push(leadUid);
+      }
+      sidekick.officialLeads = officialLeads.sort();
+    }
     // Fake provider store backing /picker/providers* — mirrors the backend API.
     const fakeProviders = window.DMP_FAKE_PROVIDERS = window.DMP_FAKE_PROVIDERS || [];
     for (const entry of Object.values(effectiveState.byok || {})) {
@@ -157,9 +170,11 @@
         const body = JSON.parse(options.body || '{}');
         const log = document.getElementById('dmp-harness-log');
         if (log) log.textContent += '\nPOST /picker/fusion ' + JSON.stringify(body);
-        if (body.lead?.kind === 'native' && body.sidekick?.kind === 'native') {
+        if (body.lead?.kind === 'native' && body.sidekick?.kind === 'native' && body.lead.uid !== body.sidekick.uid) {
           const officialUid = 'fusion-' + body.lead.uid + '-sidekick-' + body.sidekick.uid;
-          if (visibleModelConfigs.some(item => item.modelUid === officialUid)) return ok({ uid: officialUid });
+          if (visibleModelConfigs.some(item => item.modelUid === officialUid && item.disabled !== true)) {
+            return ok({ uid: officialUid });
+          }
         }
         slotToggle = slotToggle === 'a' ? 'b' : 'a';
         return ok({ uid: 'fusion-dmp-' + slotToggle });

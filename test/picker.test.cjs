@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const picker = require('../media/picker.js');
 
 test('picker.js exports pure helpers under node', () => {
@@ -775,4 +776,369 @@ test('clipboardStatus reports success only after writeText resolves', async () =
   assert.ok(action.includes('clipboardStatus'));
   assert.ok(action.includes('.then'), 'toast waits for clipboardStatus');
   assert.ok(!action.includes("?.catch?.(() => {})"), 'failed writes are no longer swallowed before the toast');
+});
+
+test('DOM regression: trigger label clears data-devin-zh-skip on single model and fusion cards hide badges when blocked', async () => {
+  const frames = [];
+  const timers = [];
+  let timerId = 1;
+  function matchSimple(node, part) {
+    if (!node || node.nodeType !== 1) return false;
+    let rest = part.trim();
+    const nots = [];
+    rest = rest.replace(/:not\(([^)]+)\)/g, (_, inner) => { nots.push(inner); return ''; });
+    for (const neg of nots) if (matchSimple(node, neg)) return false;
+    const tagMatch = rest.match(/^[a-zA-Z0-9_-]+/);
+    if (tagMatch) {
+      if (node.tagName !== tagMatch[0].toUpperCase()) return false;
+      rest = rest.slice(tagMatch[0].length);
+    }
+    while (rest.length) {
+      if (rest[0] === '.') {
+        const m = rest.match(/^\.([a-zA-Z0-9_-]+)/);
+        if (!m || !node.classList.contains(m[1])) return false;
+        rest = rest.slice(m[0].length);
+      } else if (rest[0] === '#') {
+        const m = rest.match(/^#([a-zA-Z0-9_-]+)/);
+        if (!m || node.id !== m[1]) return false;
+        rest = rest.slice(m[0].length);
+      } else if (rest[0] === '[') {
+        const m = rest.match(/^\[([^=\]]+)(?:="([^"]*)")?\]/);
+        if (!m) return false;
+        if (!node.hasAttribute(m[1])) return false;
+        if (m[2] !== undefined && node.getAttribute(m[1]) !== m[2]) return false;
+        rest = rest.slice(m[0].length);
+      } else {
+        return false;
+      }
+    }
+    return true;
+  }
+  function matchSelector(node, sel) {
+    const parts = sel.trim().split(/\s+/);
+    if (!matchSimple(node, parts[parts.length - 1])) return false;
+    let cur = node.parentElement;
+    for (let i = parts.length - 2; i >= 0; i--) {
+      while (cur && !matchSimple(cur, parts[i])) cur = cur.parentElement;
+      if (!cur) return false;
+      cur = cur.parentElement;
+    }
+    return true;
+  }
+  function makeNode(nodeType, tagOrText) {
+    const attrs = Object.create(null);
+    const children = [];
+    const listeners = new Map();
+    const classes = new Set();
+    let idVal = '';
+    const node = {
+      nodeType,
+      tagName: nodeType === 1 ? String(tagOrText).toUpperCase() : undefined,
+      childNodes: children,
+      get children() { return children.filter(c => c.nodeType === 1); },
+      get firstChild() { return children[0] || null; },
+      get nextSibling() {
+        const p = node.parentElement;
+        if (!p) return null;
+        const i = p.childNodes.indexOf(node);
+        return i >= 0 ? p.childNodes[i + 1] || null : null;
+      },
+      get previousElementSibling() {
+        const p = node.parentElement;
+        if (!p) return null;
+        const els = p.children;
+        const i = els.indexOf(node);
+        return i > 0 ? els[i - 1] : null;
+      },
+      parentElement: null,
+      style: {},
+      offsetWidth: 720,
+      scrollTop: 0,
+      disabled: false,
+      value: '',
+      title: '',
+      placeholder: '',
+      get id() { return idVal; },
+      set id(v) { idVal = String(v || ''); if (idVal) attrs.id = idVal; else delete attrs.id; },
+      classList: {
+        add(...names) { for (const n of names) if (n) classes.add(n); },
+        remove(...names) { for (const n of names) classes.delete(n); },
+        toggle(n, force) {
+          const on = force === undefined ? !classes.has(n) : !!force;
+          if (on) classes.add(n); else classes.delete(n);
+          return on;
+        },
+        contains(n) { return classes.has(n); },
+      },
+      get className() { return [...classes].join(' '); },
+      set className(v) { classes.clear(); for (const c of String(v || '').split(/\s+/)) if (c) classes.add(c); },
+      setAttribute(name, value) {
+        const val = value == null ? '' : String(value);
+        attrs[name] = val;
+        if (name === 'id') idVal = val;
+      },
+      getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
+      hasAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name); },
+      removeAttribute(name) { delete attrs[name]; if (name === 'id') idVal = ''; },
+      appendChild(child) {
+        if (child.parentElement) child.parentElement.removeChild(child);
+        children.push(child);
+        child.parentElement = node;
+        return child;
+      },
+      insertBefore(child, ref) {
+        if (!ref) return node.appendChild(child);
+        if (child.parentElement) child.parentElement.removeChild(child);
+        const i = children.indexOf(ref);
+        if (i < 0) children.push(child); else children.splice(i, 0, child);
+        child.parentElement = node;
+        return child;
+      },
+      removeChild(child) {
+        const i = children.indexOf(child);
+        if (i >= 0) { children.splice(i, 1); child.parentElement = null; }
+        return child;
+      },
+      replaceChildren(...items) {
+        while (children.length) node.removeChild(children[0]);
+        for (const item of items) node.appendChild(item);
+      },
+      remove() { if (node.parentElement) node.parentElement.removeChild(node); },
+      contains(target) {
+        if (target === node) return true;
+        return children.some(c => c.contains(target));
+      },
+      closest(sel) {
+        let cur = node;
+        while (cur) {
+          if (cur.nodeType === 1 && sel.split(',').some(s => matchSelector(cur, s))) return cur;
+          cur = cur.parentElement;
+        }
+        return null;
+      },
+      querySelectorAll(sel) {
+        const out = [];
+        const parts = sel.split(',');
+        const walk = cur => {
+          for (const c of cur.children) {
+            if (parts.some(p => matchSelector(c, p))) out.push(c);
+            walk(c);
+          }
+        };
+        walk(node);
+        return out;
+      },
+      querySelector(sel) { return node.querySelectorAll(sel)[0] || null; },
+      addEventListener(type, fn) {
+        if (!listeners.has(type)) listeners.set(type, []);
+        listeners.get(type).push(fn);
+      },
+      removeEventListener(type, fn) {
+        const list = listeners.get(type);
+        if (list) listeners.set(type, list.filter(f => f !== fn));
+      },
+      dispatchEvent(ev) {
+        ev.target = ev.target || node;
+        for (const fn of [...(listeners.get(ev.type) || [])]) fn(ev);
+      },
+      click() { node.dispatchEvent({ type: 'click', stopPropagation() {}, preventDefault() {}, stopImmediatePropagation() {} }); },
+      focus() {},
+      getBoundingClientRect() { return { top: 400, bottom: 424, left: 100, right: 200, width: 100, height: 24 }; },
+    };
+    if (nodeType === 3) {
+      let val = String(tagOrText || '');
+      Object.defineProperty(node, 'nodeValue', { get: () => val, set: v => { val = String(v); } });
+      Object.defineProperty(node, 'textContent', { get: () => val, set: v => { val = String(v); } });
+    } else {
+      Object.defineProperty(node, 'textContent', {
+        get: () => children.map(c => c.textContent).join(''),
+        set: v => {
+          while (children.length) node.removeChild(children[0]);
+          if (v !== '' && v != null) node.appendChild(makeNode(3, String(v)));
+        },
+      });
+    }
+    return node;
+  }
+  const createDomSandbox = () => {
+    const head = makeNode(1, 'head');
+    const body = makeNode(1, 'body');
+    const htmlEl = makeNode(1, 'html');
+    htmlEl.appendChild(head);
+    htmlEl.appendChild(body);
+    const store = new Map();
+    const winListeners = new Map();
+    const docListeners = new Map();
+    const s = {
+      console: { log() {}, warn() {}, error() {} },
+      Response,
+      AbortSignal,
+      AbortController,
+      URL,
+      NodeFilter: { SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2 },
+      MutationObserver: class { observe() {} disconnect() {} },
+      localStorage: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) },
+      matchMedia: () => ({ matches: false }),
+      getComputedStyle: () => ({ backgroundColor: 'rgb(255, 255, 255)', fontFamily: 'sans-serif' }),
+      requestAnimationFrame: fn => frames.push(fn),
+      setTimeout: (fn, delay = 0) => { const id = timerId++; timers.push({ id, fn, delay }); return id; },
+      clearTimeout: id => { const i = timers.findIndex(t => t.id === id); if (i >= 0) timers.splice(i, 1); },
+      innerWidth: 1280,
+      innerHeight: 800,
+      addEventListener(type, fn) {
+        if (!winListeners.has(type)) winListeners.set(type, []);
+        winListeners.get(type).push(fn);
+      },
+      removeEventListener(type, fn) {
+        const list = winListeners.get(type);
+        if (list) winListeners.set(type, list.filter(f => f !== fn));
+      },
+      document: {
+        documentElement: htmlEl,
+        head,
+        body,
+        activeElement: null,
+        createElement: tag => makeNode(1, tag),
+        createTextNode: text => makeNode(3, text),
+        getElementById: id => htmlEl.querySelector('#' + id),
+        querySelector: sel => htmlEl.querySelector(sel),
+        querySelectorAll: sel => htmlEl.querySelectorAll(sel),
+        elementsFromPoint: () => [],
+        addEventListener(type, fn) {
+          if (!docListeners.has(type)) docListeners.set(type, []);
+          docListeners.get(type).push(fn);
+        },
+        removeEventListener(type, fn) {
+          const list = docListeners.get(type);
+          if (list) docListeners.set(type, list.filter(f => f !== fn));
+        },
+        createTreeWalker(root, _what, filter) {
+          const nodes = [];
+          const walk = cur => {
+            for (const c of cur.childNodes) {
+              if (c.nodeType === 3 && (!filter || filter.acceptNode(c) === 1)) nodes.push(c);
+              walk(c);
+            }
+          };
+          walk(root);
+          let idx = -1;
+          return { nextNode() { idx++; return nodes[idx] || null; } };
+        },
+      },
+    };
+    s.window = s;
+    s.globalThis = s;
+    s.self = s;
+    return { sandbox: s, body, winListeners };
+  };
+
+  const flush = async () => {
+    for (let i = 0; i < 6; i++) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      while (frames.length) frames.shift()();
+      while (timers.length) {
+        timers.sort((a, b) => a.delay - b.delay);
+        timers.shift().fn();
+      }
+      while (frames.length) frames.shift()();
+    }
+  };
+
+  const clickTrigger = (winListeners, button) => {
+    for (const fn of winListeners.get('click') || []) {
+      fn({ target: button, altKey: false, preventDefault() {}, stopImmediatePropagation() {} });
+    }
+  };
+
+  // 1) Official Fusion A sets text and data-devin-zh-skip; switching back to single model clears it.
+  const { sandbox, body, winListeners } = createDomSandbox();
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../dev/fixture.js'), 'utf8'), sandbox);
+  const fiber = sandbox.DMP_FIBER({ visibleModelConfigs: sandbox.DMP_FIXTURE.visibleModelConfigs });
+  const pairA = 'fusion-claude-opus-5-5-high-sidekick-swe-2-high';
+  fiber.hostProps.onModelSelect({ modelUid: pairA });
+  body.appendChild(fiber.button);
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8'), sandbox);
+
+  assert.equal(fiber.button.querySelector('[data-label]').textContent, 'Claude Opus 5.5 High + SWE-2 High');
+  assert.equal(fiber.button.hasAttribute('data-devin-zh-skip'), true);
+
+  clickTrigger(winListeners, fiber.button);
+  await flush();
+  const panel = body.querySelector('.dmp-panel');
+  assert.ok(panel, 'fixture panel opened');
+  [...panel.querySelectorAll('.dmp-seg button')].find(b => b.textContent === '单模型').click();
+  panel.querySelectorAll('.dmp-card').find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'SWE' && c.querySelector('.dmp-ver')?.textContent === '2' && !c.querySelector('.dmp-var')).click();
+  await flush();
+  assert.equal(fiber.button.querySelector('[data-label]').textContent, 'SWE-2 High');
+  assert.equal(fiber.button.hasAttribute('data-devin-zh-skip'), false,
+    'switching back to a single model must clear data-devin-zh-skip');
+
+  // 2) Open panel in Fusion mode with real-data snapshot + fixture to inspect blocked lead card and official/unofficial sidekick cards.
+  const { sandbox: sandboxReal, body: bodyReal, winListeners: realWinListeners } = createDomSandbox();
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../dev/real-data.js'), 'utf8'), sandboxReal);
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../dev/fixture.js'), 'utf8'), sandboxReal);
+  const fiberReal = sandboxReal.DMP_FIBER({ visibleModelConfigs: sandboxReal.DMP_FIXTURE.visibleModelConfigs });
+  fiberReal.hostProps.onModelSelect({ modelUid: 'claude-opus-5-5-medium' });
+  bodyReal.appendChild(fiberReal.button);
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8'), sandboxReal);
+
+  clickTrigger(realWinListeners, fiberReal.button);
+  await flush();
+  const realPanel = bodyReal.querySelector('.dmp-panel');
+  assert.ok(realPanel, 'real-data panel opened');
+  [...realPanel.querySelectorAll('.dmp-seg button')].find(b => b.textContent === 'Fusion').click();
+  await flush();
+
+  realPanel.querySelectorAll('.dmp-slot')[0].click();
+  const realLeadOpus = realPanel.querySelectorAll('.dmp-card').find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'Opus' && c.querySelector('.dmp-prov')?.textContent === 'Devin');
+  assert.ok(realLeadOpus, 'native Opus card found in lead slot');
+  [...realLeadOpus.querySelectorAll('.dmp-eff button')].find(b => b.textContent === 'M').click();
+
+  realPanel.querySelectorAll('.dmp-slot')[1].click();
+  const realSideCards = realPanel.querySelectorAll('.dmp-card');
+  const blockedOpus = realSideCards.find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'Opus' && c.querySelector('.dmp-prov')?.textContent === 'Devin');
+  assert.ok(blockedOpus && blockedOpus.classList.contains('dmp-off'), 'lead-occupied card is blocked in sidekick slot');
+  assert.equal(blockedOpus.querySelector('.dmp-role')?.textContent, '主模型');
+  assert.equal(blockedOpus.querySelector('.dmp-pair'), null, 'blocked card must NOT show 官方/非官方 badge');
+
+  const sweCard = realSideCards.find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'SWE' && c.querySelector('.dmp-ver')?.textContent === '2' && !c.querySelector('.dmp-var'));
+  assert.ok(sweCard, 'SWE-2 sidekick card exists');
+  const pairBadge = sweCard.querySelector('.dmp-pair');
+  assert.ok(pairBadge, 'unblocked sidekick card renders pairing badge');
+  assert.equal(pairBadge.textContent, '官方');
+  assert.ok(pairBadge.classList.contains('dmp-pair-ok'));
+
+  const maxBtn = [...sweCard.querySelectorAll('.dmp-eff button')].find(b => b.textContent === 'Max');
+  assert.ok(maxBtn, 'Max effort cell exists on SWE-2 card');
+  maxBtn.click();
+  const warn = realPanel.querySelector('.dmp-foot .dmp-warn');
+  assert.ok(warn, 'unofficial pair shows footer warning');
+  assert.ok(warn.textContent.includes('主模型') && !warn.textContent.includes('lead'));
+
+  // 3) Apply Official Pair -> switch to single model and confirm data-devin-zh-skip clears on trigger.
+  const sweAfter = realPanel.querySelectorAll('.dmp-card').find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'SWE' && c.querySelector('.dmp-ver')?.textContent === '2' && !c.querySelector('.dmp-var'));
+  const highBtn = [...sweAfter.querySelectorAll('.dmp-eff button')].find(b => b.textContent === 'H');
+  assert.ok(highBtn, 'High effort cell exists on SWE-2 card');
+  highBtn.click();
+  const applyBtn = realPanel.querySelector('.dmp-apply');
+  assert.ok(applyBtn && !applyBtn.disabled, 'apply button enabled for official pair');
+  applyBtn.click();
+  await flush();
+  assert.equal(fiberReal.button.querySelector('[data-label]').textContent, 'Claude Opus 5.5 Medium + SWE-2 High');
+  assert.equal(fiberReal.button.hasAttribute('data-devin-zh-skip'), true);
+
+  // selectModel keeps the panel open; switch straight back to single-model tab on realPanel.
+  [...realPanel.querySelectorAll('.dmp-seg button')].find(b => b.textContent === '单模型').click();
+  const singleSwe = realPanel.querySelectorAll('.dmp-card').find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'SWE' && c.querySelector('.dmp-ver')?.textContent === '2' && !c.querySelector('.dmp-var'));
+  singleSwe.click();
+  await flush();
+  assert.equal(fiberReal.button.querySelector('[data-label]').textContent, 'SWE-2 Medium');
+  assert.equal(fiberReal.button.hasAttribute('data-devin-zh-skip'), false,
+    'switching back to a single model must clear data-devin-zh-skip from the trigger');
 });

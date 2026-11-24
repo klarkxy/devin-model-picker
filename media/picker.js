@@ -2412,9 +2412,11 @@ function refreshTriggerLabels() {
       if (node.nodeValue !== text) node.nodeValue = text;
       continue;
     }
+    if (button.hasAttribute?.('data-devin-zh-skip')) button.removeAttribute?.('data-devin-zh-skip');
     if (button.__dmpOrigText != null && (!uid || model?.familyUid === 'fusion')) {
       if (node.nodeValue !== button.__dmpOrigText) node.nodeValue = button.__dmpOrigText;
     }
+    if (uid && model?.familyUid !== 'fusion') button.__dmpOrigText = null;
   }
 }
 let triggerLabelsScheduled = false;

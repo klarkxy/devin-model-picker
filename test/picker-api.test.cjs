@@ -202,6 +202,42 @@ test('native sidekick candidates expose officialLeads from observed fusion route
   const bare = pickerState({ version: 'x', catalog, config });
   assert.deepEqual(bare.fusionCandidates.sidekicks.find(c => c.ref.uid === 'swe-2-high').officialLeads, [],
     'missing observedNatives behaves as empty');
+
+  // Self-pairing (`leadUid === sidekickUid`) and ambiguous `-sidekick-` substrings must not misclassify.
+  const trickyNatives = { clientModelConfigs: [
+    { modelUid: 'alpha-sidekick-beta', label: 'Alpha Sidekick Beta',
+      modelInfo: { harnessUids: ['swe-1p5', 'swe-1p6'], isModelRouter: false } },
+    { modelUid: 'beta', label: 'Beta',
+      modelInfo: { harnessUids: ['swe-1p5', 'swe-1p6'], isModelRouter: false } },
+    { modelUid: 'fusion-alpha-sidekick-beta-sidekick-alpha-sidekick-beta', label: 'Self',
+      modelInfo: { harnessUids: ['fusion'], isModelRouter: true },
+      modelFamilyMetadata: { entries: [
+        { key: 'Lead', value: { order: 1, name: 'Alpha Sidekick Beta' } },
+        { key: 'Effort', value: { order: 1, name: 'High' } },
+        { key: 'Sidekick', value: { order: 1, name: 'Alpha Sidekick Beta' } },
+      ] } },
+    { modelUid: 'fusion-alpha-sidekick-beta-sidekick-beta', label: 'Valid Tricky',
+      modelInfo: { harnessUids: ['fusion'], isModelRouter: true },
+      modelFamilyMetadata: { entries: [
+        { key: 'Lead', value: { order: 1, name: 'Alpha Sidekick Beta' } },
+        { key: 'Effort', value: { order: 1, name: 'High' } },
+        { key: 'Sidekick', value: { order: 2, name: 'Beta' } },
+      ] } },
+  ] };
+  const trickyObs = collectNativeModels(trickyNatives, { rpc: 'GetCliModelConfigs', format: { json: true } });
+  const trickyCatalog = buildCatalog(config, trickyObs);
+  const trickyMap = new Map(trickyObs.map(entry => [entry.uid, entry]));
+  const trickyState = pickerState({ version: 'x', catalog: trickyCatalog, config, observedNatives: trickyMap });
+  assert.deepEqual(
+    trickyState.fusionCandidates.sidekicks.find(c => c.ref.uid === 'alpha-sidekick-beta').officialLeads,
+    [],
+    'leadUid === sidekickUid is skipped even if an official-looking router exists',
+  );
+  assert.deepEqual(
+    trickyState.fusionCandidates.sidekicks.find(c => c.ref.uid === 'beta').officialLeads,
+    ['alpha-sidekick-beta'],
+    'forward lookup handles -sidekick- inside lead UIDs without lastIndexOf ambiguity',
+  );
 });
 
 test('BYOK fusion candidate familyLabel drops the catalog effort suffix', () => {

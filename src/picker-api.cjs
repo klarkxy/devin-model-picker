@@ -40,21 +40,7 @@ function refKey(ref) { return ref.kind + ':' + ref.uid; }
 // observed enabled — the same pair rule pickerFusion redirects on.
 function candidates(catalog, config, observedNatives) {
   const leads = [], sidekicks = [];
-  const officialBySidekick = new Map();
   const eligibleLeadUids = catalog.roles?.eligibleNativeLeads;
-  if (observedNatives instanceof Map && eligibleLeadUids instanceof Map) {
-    for (const [uid, entry] of observedNatives) {
-      if (typeof uid !== 'string' || !uid.startsWith('fusion-') || uid.startsWith('fusion-dmp-')) continue;
-      const marker = uid.lastIndexOf('-sidekick-');
-      if (marker <= 'fusion-'.length) continue;
-      if (entry?.disabled === true) continue;
-      const leadUid = uid.slice('fusion-'.length, marker);
-      const sidekickUid = uid.slice(marker + '-sidekick-'.length);
-      if (!eligibleLeadUids.has(leadUid) || !sidekickUid) continue;
-      const list = officialBySidekick.get(sidekickUid);
-      if (list) list.push(leadUid); else officialBySidekick.set(sidekickUid, [leadUid]);
-    }
-  }
   const providers = new Map((Array.isArray(config.providers) ? config.providers : []).map(p => [p.id, p]));
   for (const route of Object.values(catalog.routes || {})) {
     if (route.enabled === false) continue;
@@ -95,9 +81,18 @@ function candidates(catalog, config, observedNatives) {
       familyKey: native.familyUid || native.uid });
   }
   for (const native of catalog.roles?.eligibleNativeSidekicks?.values() || []) {
+    const officialLeads = [];
+    if (observedNatives instanceof Map && eligibleLeadUids instanceof Map) {
+      for (const leadUid of eligibleLeadUids.keys()) {
+        if (leadUid === native.uid) continue;
+        const observed = observedNatives.get('fusion-' + leadUid + '-sidekick-' + native.uid);
+        if (observed && observed.disabled !== true) officialLeads.push(leadUid);
+      }
+      officialLeads.sort();
+    }
     sidekicks.push({ ref: { kind: 'native', uid: native.uid }, label: native.label || native.uid,
       providerName: 'Devin', effort: native.effort ?? null,
-      officialLeads: (officialBySidekick.get(native.uid) || []).sort(),
+      officialLeads,
       ...(native.effortOrder != null ? { effortOrder: native.effortOrder } : {}),
       ...(native.familyLabel ? { familyLabel: native.familyLabel } : {}),
       familyKey: native.familyUid || native.uid });

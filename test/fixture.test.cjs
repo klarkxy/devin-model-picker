@@ -40,7 +40,7 @@ function el(tag) {
   return node;
 }
 
-function loadFixture() {
+function loadFixture({ realData = false, stripOfficialLeads = false } = {}) {
   const sandbox = {
     console,
     Response,
@@ -54,6 +54,12 @@ function loadFixture() {
   };
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
+  if (realData) {
+    vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../dev/real-data.js'), 'utf8'), sandbox);
+    if (stripOfficialLeads) {
+      for (const sk of sandbox.DMP_STATE_OVERRIDE.fusionCandidates.sidekicks) delete sk.officialLeads;
+    }
+  }
   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../dev/fixture.js'), 'utf8'), sandbox);
   return sandbox;
 }
@@ -127,4 +133,26 @@ test('fixture /picker/fusion returns the official router uid for an official pai
   const unofficialBody = await unofficial.json();
   assert.match(unofficialBody.uid, /^fusion-dmp-[ab]$/,
     'pairs without an official router still land on a dmp slot');
+});
+
+test('real-data snapshot + fixture expose officialLeads matching official fusion routers and /picker/fusion', async () => {
+  for (const stripOfficialLeads of [false, true]) {
+    const sandbox = loadFixture({ realData: true, stripOfficialLeads });
+    const sidekicks = sandbox.DMP_FIXTURE.state.fusionCandidates.sidekicks;
+    const sweMedium = sidekicks.find(item => item.ref.kind === 'native' && item.ref.uid === 'swe-2-medium');
+    const sweHigh = sidekicks.find(item => item.ref.kind === 'native' && item.ref.uid === 'swe-2-high');
+    const sweMax = sidekicks.find(item => item.ref.kind === 'native' && item.ref.uid === 'swe-2-max');
+    assert.equal(picker.pairingTag({ kind: 'native', uid: 'claude-opus-5-5-high' }, sweMedium), 'official');
+    assert.equal(picker.pairingTag({ kind: 'native', uid: 'claude-opus-5-5-medium' }, sweHigh), 'official');
+    assert.equal(picker.pairingTag({ kind: 'native', uid: 'claude-opus-5-5-high' }, sweMax), 'unofficial');
+    const res = await sandbox.fetch('http://127.0.0.1:39852/picker/fusion', {
+      method: 'POST',
+      body: JSON.stringify({
+        lead: { kind: 'native', uid: 'claude-opus-5-5-medium' },
+        sidekick: { kind: 'native', uid: 'swe-2-high' },
+      }),
+    });
+    const body = await res.json();
+    assert.equal(body.uid, 'fusion-claude-opus-5-5-medium-sidekick-swe-2-high');
+  }
 });
