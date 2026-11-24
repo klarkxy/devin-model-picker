@@ -7,9 +7,11 @@ const picker = require('../media/picker.js');
 
 test('picker.js exports pure helpers under node', () => {
   for (const key of ['cardName', 'effortLabel', 'filterNorm', 'groupCards', 'groupFusion', 'prefillFusion',
-    'defaultVariant', 'pairingTag', 'fusionPairLabel']) {
+    'defaultVariant', 'pairingTag', 'fusionPairLabel', 'triggerSelectionUid', 'triggerPairText',
+    'acceptTriggerTextNode']) {
     assert.equal(typeof picker[key], 'function', key);
   }
+  assert.deepEqual(picker.TRIGGER_LABEL_DELAYS, [60, 300, 1000, 2500]);
 });
 
 test('cardName splits name/version/variant per the naming table', () => {
@@ -168,6 +170,96 @@ test('fusionPairLabel extracts the concrete pair from official fusion labels', (
   assert.equal(picker.fusionPairLabel({ familyUid: 'fusion', label: 'Fusion' }), null,
     'label without parentheses → null');
   assert.equal(picker.fusionPairLabel(null), null);
+  assert.equal(picker.fusionPairLabel(
+    { familyUid: 'fusion', label: '融合 (Claude Opus 5.5 High + SWE-2 High)' }),
+    'Claude Opus 5.5 High + SWE-2 High', 'localized Fusion still yields the pair');
+  assert.equal(picker.fusionPairLabel(
+    { familyUid: 'fusion', label: '融合（Claude Opus 5.5 High + SWE-2 High）' }),
+    'Claude Opus 5.5 High + SWE-2 High', 'fullwidth parentheses');
+  assert.equal(picker.fusionPairLabel(
+    { familyUid: 'fusion', label: 'Fusion（Opus High + SWE High）' }),
+    'Opus High + SWE High');
+});
+
+test('triggerPairText prefers live root.value over stale selectedModels after official pair switch', () => {
+  const pairA = 'fusion-claude-opus-5-5-high-sidekick-swe-2-high';
+  const pairB = 'fusion-claude-opus-5-5-medium-sidekick-swe-2-high';
+  const host = {
+    selectedModels: [pairA],
+    visibleModelConfigs: [
+      { modelUid: pairA, familyUid: 'fusion', label: 'Fusion (Claude Opus 5.5 High + SWE-2 High)' },
+      { modelUid: pairB, familyUid: 'fusion', label: 'Fusion (Claude Opus 5.5 Medium + SWE-2 High)' },
+    ],
+  };
+  assert.equal(picker.triggerPairText({ root: { value: pairA } }, host),
+    'Claude Opus 5.5 High + SWE-2 High', 'same-tick rewrite still shows pair A');
+  // ACP has not confirmed: selectedModels is still A, but the picker value moved.
+  // A selectedModels-only reader would keep pair A on the trigger.
+  assert.equal(picker.triggerPairText({ root: { value: pairB } }, host),
+    'Claude Opus 5.5 Medium + SWE-2 High',
+    'currentValue wins over stale selectedModels when no characterData fires');
+  assert.equal(picker.fusionPairLabel(host.visibleModelConfigs.find(m => m.modelUid === host.selectedModels[0])),
+    'Claude Opus 5.5 High + SWE-2 High');
+  host.selectedModels = [pairB];
+  assert.equal(picker.triggerPairText({ root: { value: pairB } }, host),
+    'Claude Opus 5.5 Medium + SWE-2 High');
+  assert.equal(picker.triggerPairText({ root: {} }, host),
+    'Claude Opus 5.5 Medium + SWE-2 High', 'falls back to selectedModels when value is empty');
+  assert.equal(picker.triggerSelectionUid({ root: {} }, { selectedModels: [] }), null);
+  assert.equal(picker.triggerSelectionUid({ root: {} }, { selectedModels: [pairA, pairB] }), null,
+    'multi-select does not pick an arbitrary uid');
+});
+
+test('acceptTriggerTextNode skips svg, aria-hidden, and the classic-switch affordance', () => {
+  const node = (value, hits) => ({
+    nodeValue: value,
+    parentElement: { closest: sel => hits.includes(sel) ? {} : null },
+  });
+  assert.equal(picker.acceptTriggerTextNode(node('Fusion', [])), true);
+  assert.equal(picker.acceptTriggerTextNode(node('  pair  ', [])), true);
+  assert.equal(picker.acceptTriggerTextNode(node('Fusion', ['svg'])), false);
+  assert.equal(picker.acceptTriggerTextNode(node('Fusion', ['[aria-hidden="true"]'])), false);
+  assert.equal(picker.acceptTriggerTextNode(node('Fusion', ['[data-dmp-native-switch]'])), false);
+  assert.equal(picker.acceptTriggerTextNode(node('   ', [])), false);
+  assert.equal(picker.acceptTriggerTextNode(null), false);
+});
+
+test('trigger label refresh is delayed independently of panelState and bound per trigger', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8');
+  const select = source.slice(source.indexOf('function selectModel'), source.indexOf('function refreshLocated'));
+  const refresh = source.slice(source.indexOf('function refreshLocated'), source.indexOf('function openMenu'));
+  const delayed = source.slice(source.indexOf('function scheduleDelayedTriggerLabels'),
+    source.indexOf('function bind()'));
+  const labels = source.slice(source.indexOf('function refreshTriggerLabels'),
+    source.indexOf('let triggerLabelsScheduled'));
+  const observer = source.slice(source.indexOf('const labelObserver'),
+    source.indexOf('const themeObserver'));
+  const bind = source.slice(source.indexOf('function bind()'), source.indexOf('function scheduleBind'));
+  const menus = source.slice(source.indexOf('function bindMenus'), source.indexOf('function refreshTriggerLabels'));
+  const fusionCard = source.slice(source.indexOf('function buildFusionCard'), source.indexOf('function slotChip'));
+
+  assert.ok(select.includes('scheduleDelayedTriggerLabels'),
+    'selectModel must re-read labels after ACP, not only on the next frame');
+  assert.ok(select.includes('scheduleTriggerLabels'));
+  assert.ok(delayed.includes('TRIGGER_LABEL_DELAYS'));
+  assert.ok(!delayed.includes('panelState') && !delayed.includes('panel '),
+    'delayed label refresh must outlive the panel');
+  assert.ok(refresh.includes('scheduleTriggerLabels'),
+    'refreshLocated must rewrite the trigger when live value changes');
+  assert.ok(labels.includes('triggerSelectionUid') && labels.includes('__dmpOrigText')
+    && labels.includes('data-devin-zh-skip'),
+    'rewrite prefers currentValue, caches original text, and skips zh-hans');
+  assert.ok(observer.includes('observeTriggerLabel') || observer.includes('labelObserver.observe(button'));
+  assert.ok(!observer.includes('document.documentElement') && !observer.includes('document.body'),
+    'labelObserver must not watch the whole document');
+  assert.ok(bind.includes('observeTriggerLabel(button)'));
+  assert.ok(menus.includes('scheduleDelayedTriggerLabels'),
+    'native-menu selection also schedules the delayed label refresh');
+  assert.ok(fusionCard.includes("activeSlot === 'sidekick' && !blocked && costVariant?.ref"),
+    'blocked lead cards in the sidekick slot do not get 官方/非官方 tags');
+  assert.ok(!source.includes('此组合下 lead') && !source.includes('消耗更多 lead'),
+    'unofficial-pair copy uses 主模型, not English lead');
+  assert.match(source, /非官方配对：主模型可能承担更多工作/);
 });
 
 test('filterNorm ignores case, dashes, dots and spaces so gpt5 finds GPT-5', () => {

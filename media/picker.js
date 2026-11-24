@@ -448,11 +448,48 @@ function pairingTag(leadRef, sidekickCandidate) {
 // Official fusion renderer entries label the trigger just "Fusion": the host
 // picks familyLabel over label, so the pair inside "Fusion (Lead + Sidekick)"
 // never shows. Extract it here (Fast variants already keep "Fast" inside).
+// Accept 融合 and fullwidth parentheses so a zh-hans rewrite of the label
+// still yields the pair.
 function fusionPairLabel(model) {
   if (model?.familyUid !== 'fusion') return null;
-  const match = /^Fusion\s*\((.+)\)\s*$/.exec(String(model?.label || ''));
+  const match = /^(?:Fusion|融合)\s*[（(](.+)[)）]\s*$/i.exec(String(model?.label || ''));
   return match ? match[1].trim() : null;
 }
+
+// Prefer the trigger's own picker value (currentValue) over host.selectedModels:
+// after an official pair switch, ACP may still report the previous uid in
+// selectedModels while root.value has already moved.
+function triggerSelectionUid(located, host) {
+  const live = located?.root?.value;
+  if (typeof live === 'string' && live) return live;
+  const selected = Array.isArray(host?.selectedModels) ? host.selectedModels : [];
+  return selected.length === 1 ? selected[0] : null;
+}
+
+function triggerPairText(located, host) {
+  const uid = triggerSelectionUid(located, host);
+  if (!uid) return null;
+  const model = (host?.visibleModelConfigs || []).find(entry => entry?.modelUid === uid);
+  return fusionPairLabel(model);
+}
+
+// Text nodes inside the classic-switch affordance, SVG chrome, or aria-hidden
+// decorations are never the composer label.
+function acceptTriggerTextNode(node) {
+  if (!node?.nodeValue || !String(node.nodeValue).trim()) return false;
+  const parent = node.parentElement;
+  if (parent && typeof parent.closest === 'function') {
+    if (parent.closest('[data-dmp-native-switch]')) return false;
+    if (parent.closest('svg')) return false;
+    if (parent.closest('[aria-hidden="true"]')) return false;
+  }
+  return true;
+}
+
+// Same cadence as refreshLocated: ACP confirmation lands around 100–300ms and
+// official Fusion → Fusion leaves React's text node at "Fusion", so we must
+// re-read labels after the round-trip even with no characterData mutation.
+const TRIGGER_LABEL_DELAYS = [60, 300, 1000, 2500];
 
 // Card preferences: order/favorites/hidden/aliases keyed by the canonical
 // cardKey ('name|version|variant', lowercase). Three independent lists —
@@ -656,12 +693,13 @@ function priceInfo(model) {
 const PICKER_ORIGIN = 'vscode-file://vscode-app';
 const API_BASE = 'http://127.0.0.1:39852';
 const LS_KEY = 'devin-model-picker:v1';
-const UNOFFICIAL_PAIR_HINT = '非官方配对：Fusion 的协作指令按官方组合调优，此组合下 lead 可能承担更多工作、消耗更多 lead 额度';
+const UNOFFICIAL_PAIR_HINT = '非官方配对：Fusion 的协作指令按官方组合调优，此组合下主模型可能承担更多工作、消耗更多主模型额度';
 
 const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, baseLabel,
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
   underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
   stripEffortSuffix, fusionSlotText, clipboardStatus, pairingTag, fusionPairLabel,
+  triggerSelectionUid, triggerPairText, acceptTriggerTextNode, TRIGGER_LABEL_DELAYS,
   validDraft, pickFusionSlots, hidesCard, sanitizePrefs, prefSets, appendNewKeys, arrangeCards, applyCardDrop, dropModeFromRatio,
   moveCardKey, toggleKey, mergeSubsetOrder, viewMode, skipsPanelHotkeys, costTagFor, selectedVariant, priceInfo,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
@@ -1031,8 +1069,11 @@ function selectModel(uid) {
   for (const delay of [60, 300, 1000]) setTimeout(() => refreshLocated(false), delay);
   setTimeout(() => refreshLocated(true), 2500);
   // Official pair → official pair leaves React's text at "Fusion" — no
-  // characterData mutation fires, so refresh the trigger label ourselves.
+  // characterData mutation fires. Refresh on the next frame and again on the
+  // same delays as refreshLocated so a closed panel or a late ACP confirm
+  // still rewrites the trigger.
   scheduleTriggerLabels();
+  scheduleDelayedTriggerLabels();
 }
 
 // Re-walk the trigger's fiber chain — rebinding to a replacement trigger when
@@ -1055,6 +1096,7 @@ function refreshLocated(final) {
   if (live === panelState.value) return;
   panelState.value = live;
   rerenderGrid();
+  scheduleTriggerLabels();
 }
 
 // --- Context menu, drag & drop, rename --------------------------------------
@@ -1789,7 +1831,7 @@ function buildFusionCard(card, index, located, state) {
   if (card.favorite) top.appendChild(el('span', 'dmp-star', '★'));
   // 官方/非官方 tag: only meaningful while filling the sidekick slot against a
   // native lead. The displayed variant (same one the cost tag prices) decides.
-  if (panelState.activeSlot === 'sidekick' && costVariant?.ref) {
+  if (panelState.activeSlot === 'sidekick' && !blocked && costVariant?.ref) {
     const cand = (state?.fusionCandidates?.sidekicks || []).find(item =>
       item.ref.kind === costVariant.ref.kind && item.ref.uid === costVariant.ref.uid);
     const pair = pairingTag(slots.lead, cand);
@@ -2040,7 +2082,7 @@ function renderFusionFooter() {
     const sideCand = (lastState?.fusionCandidates?.sidekicks || []).find(item =>
       item.ref.kind === slots.sidekick.kind && item.ref.uid === slots.sidekick.uid);
     if (pairingTag(slots.lead, sideCand) === 'unofficial') {
-      const warn = el('span', 'dmp-warn', '非官方配对：lead 可能承担更多工作、消耗更多额度');
+      const warn = el('span', 'dmp-warn', '非官方配对：主模型可能承担更多工作、消耗更多额度');
       warn.title = UNOFFICIAL_PAIR_HINT;
       foot.appendChild(warn);
     }
@@ -2327,6 +2369,16 @@ function bindMenus() {
     const owner = menuOwner(fiber);
     if (!owner) continue;
     menu.insertBefore(nativeSwitch(owner), menu.firstChild);
+    const onNativeSelect = event => {
+      if (event?.target?.closest?.('[data-dmp-native-switch]')) return;
+      scheduleTriggerLabels();
+      scheduleDelayedTriggerLabels();
+    };
+    menu.addEventListener('click', onNativeSelect, true);
+    menu.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      onNativeSelect(event);
+    }, true);
   }
 }
 
@@ -2339,21 +2391,30 @@ function refreshTriggerLabels() {
   for (const button of document.querySelectorAll('button[aria-haspopup="menu"][data-dmp-bound]')) {
     const located = locateTrigger(button);
     const host = located?.host;
-    const selected = Array.isArray(host?.selectedModels) ? host.selectedModels : [];
-    if (selected.length !== 1) continue;
-    const model = (host?.visibleModelConfigs || []).find(entry => entry?.modelUid === selected[0]);
+    const uid = triggerSelectionUid(located, host);
+    const model = uid
+      ? (host?.visibleModelConfigs || []).find(entry => entry?.modelUid === uid)
+      : null;
     const text = fusionPairLabel(model);
-    if (!text) continue;
     const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
-        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-        if (typeof node.parentElement?.closest === 'function' &&
-            node.parentElement.closest('[data-dmp-native-switch]')) return NodeFilter.FILTER_REJECT;
-        return NodeFilter.FILTER_ACCEPT;
+        return acceptTriggerTextNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       },
     });
     const node = walker.nextNode();
-    if (node && node.nodeValue !== text) node.nodeValue = text;
+    if (!node) continue;
+    if (text) {
+      if (button.__dmpOrigText == null) {
+        const raw = String(node.nodeValue || '').trim();
+        button.__dmpOrigText = /^(?:Fusion|融合)\b/i.test(raw) ? node.nodeValue : 'Fusion';
+      }
+      button.setAttribute('data-devin-zh-skip', '');
+      if (node.nodeValue !== text) node.nodeValue = text;
+      continue;
+    }
+    if (button.__dmpOrigText != null && (!uid || model?.familyUid === 'fusion')) {
+      if (node.nodeValue !== button.__dmpOrigText) node.nodeValue = button.__dmpOrigText;
+    }
   }
 }
 let triggerLabelsScheduled = false;
@@ -2361,6 +2422,9 @@ function scheduleTriggerLabels() {
   if (triggerLabelsScheduled) return;
   triggerLabelsScheduled = true;
   requestAnimationFrame(() => { triggerLabelsScheduled = false; refreshTriggerLabels(); });
+}
+function scheduleDelayedTriggerLabels() {
+  for (const delay of TRIGGER_LABEL_DELAYS) setTimeout(scheduleTriggerLabels, delay);
 }
 
 // Trigger binding ------------------------------------------------------------
@@ -2379,6 +2443,7 @@ function bind() {
     if (!located) continue;
     button.setAttribute('data-dmp-bound', '');
     button.__dmpOpenChange = openChangeFor(button, located) || undefined;
+    observeTriggerLabel(button);
   }
   // The adjacent switch is the classic view's visible way back — it must exist
   // only while the native menu owns the trigger, never in cards view.
@@ -2438,9 +2503,14 @@ ensureStyle();
 observer = new MutationObserver(scheduleBind);
 observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
 // React flips the trigger text to "Fusion" via characterData, which the
-// childList observer above never sees — watch text changes separately.
+// childList observer above never sees — watch text changes on bound
+// triggers only (chat/editor/terminal streaming must not retrigger a walk).
 const labelObserver = new MutationObserver(scheduleTriggerLabels);
-labelObserver.observe(document.documentElement || document.body, { characterData: true, subtree: true });
+function observeTriggerLabel(button) {
+  if (!button || button.__dmpLabelObserved) return;
+  button.__dmpLabelObserved = true;
+  labelObserver.observe(button, { characterData: true, childList: true, subtree: true });
+}
 const themeObserver = new MutationObserver(() => {
   if (panel && panelState) {
     const dark = isDark(panelState.trigger);

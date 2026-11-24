@@ -53,26 +53,38 @@
       model('gemini-4-argon', 'Gemini 4 Argon', { provider: 'google', ...fam('fam-gem4', 'Gemini 4', effort(1, 'Argon')) }),
       model('locked-model', 'Locked Enterprise', { provider: 'google', disabled: true, disabledReason: '需要团队版订阅', ...fam('fam-lock', 'Locked', {}) }),
     ];
-    const fusionEntry = model('fusion-claude-opus-5-5-high-sidekick-swe-2-high',
-      'Fusion (Claude Opus 5.5 High + SWE-2 High)', {
-        displayOption: 'model-router', provider: 'windsurf',
-        familyMetadata: { Lead: { order: 3, name: 'Claude Opus 5.5 High' }, Effort: { order: 3, name: 'High' }, Sidekick: { order: 3, name: 'SWE-2 High' } },
-      });
-    const dmpFusions = [
-      model('fusion-dmp-a', 'BYOK Fusion', { displayOption: 'model-router', provider: 'windsurf', familyMetadata: {} }),
-      model('fusion-dmp-b', 'BYOK Fusion', { displayOption: 'model-router', provider: 'windsurf', familyMetadata: {} }),
+    const fusionFam = extra => ({
+      displayOption: 'model-router', provider: 'windsurf',
+      familyUid: 'fusion', familyLabel: 'Fusion', ...extra,
+    });
+    const fusionEntries = [
+      model('fusion-claude-opus-5-5-high-sidekick-swe-2-high',
+        'Fusion (Claude Opus 5.5 High + SWE-2 High)', fusionFam({
+          familyMetadata: { Lead: { order: 3, name: 'Claude Opus 5.5 High' }, Effort: { order: 3, name: 'High' }, Sidekick: { order: 3, name: 'SWE-2 High' } },
+        })),
+      model('fusion-claude-opus-5-5-medium-sidekick-swe-2-high',
+        'Fusion (Claude Opus 5.5 Medium + SWE-2 High)', fusionFam({
+          familyMetadata: { Lead: { order: 2, name: 'Claude Opus 5.5 Medium' }, Effort: { order: 2, name: 'Medium' }, Sidekick: { order: 3, name: 'SWE-2 High' } },
+        })),
     ];
-    const visibleModelConfigs = window.DMP_VMC_OVERRIDE || [...byokModels, ...natives, fusionEntry, ...dmpFusions];
+    const dmpFusions = [
+      model('fusion-dmp-a', 'BYOK Fusion', { displayOption: 'model-router', provider: 'windsurf', familyUid: 'dmp-fusion-family', familyLabel: 'BYOK Fusion', familyMetadata: {} }),
+      model('fusion-dmp-b', 'BYOK Fusion', { displayOption: 'model-router', provider: 'windsurf', familyUid: 'dmp-fusion-family', familyLabel: 'BYOK Fusion', familyMetadata: {} }),
+    ];
+    const visibleModelConfigs = window.DMP_VMC_OVERRIDE || [...byokModels, ...natives, ...fusionEntries, ...dmpFusions];
     const cand = e => ({ ref: { kind: 'byok', uid: e.uid }, label: e.label.replace(/^.*? · /, ''), providerName: e.providerName, effort: e.effort, familyKey: 'byok:' + e.providerId + ':' + e.modelId });
     const leads = [
       ...Object.values(byok).map(cand),
       { ref: { kind: 'native', uid: 'claude-opus-5-5-high' }, label: 'Claude Opus 5.5 High', providerName: 'Devin', effort: null, familyKey: 'fam-opus' },
+      { ref: { kind: 'native', uid: 'claude-opus-5-5-medium' }, label: 'Claude Opus 5.5 Medium', providerName: 'Devin', effort: null, familyKey: 'fam-opus' },
       { ref: { kind: 'native', uid: 'swe-2-high' }, label: 'SWE-2 High', providerName: 'Devin', effort: null, familyKey: 'fam-swe2' },
     ];
     const sidekicks = [
       ...Object.values(byok).map(cand),
-      { ref: { kind: 'native', uid: 'swe-2-high' }, label: 'SWE-2 High', providerName: 'Devin', effort: null, familyKey: 'fam-swe2' },
-      { ref: { kind: 'native', uid: 'swe-2-max' }, label: 'SWE-2 Max', providerName: 'Devin', effort: null, familyKey: 'fam-swe2' },
+      { ref: { kind: 'native', uid: 'swe-2-high' }, label: 'SWE-2 High', providerName: 'Devin', effort: null, familyKey: 'fam-swe2',
+        officialLeads: ['claude-opus-5-5-high', 'claude-opus-5-5-medium'] },
+      { ref: { kind: 'native', uid: 'swe-2-max' }, label: 'SWE-2 Max', providerName: 'Devin', effort: null, familyKey: 'fam-swe2',
+        officialLeads: [] },
     ];
     const state = { version: '0.1.0', enabled: true, byok,
       fusionSlots: { a: { lead: { kind: 'byok', uid: leads[3].ref.uid, label: leads[3].label }, sidekick: { kind: 'native', uid: 'swe-2-high', label: 'SWE-2 High' } } },
@@ -145,6 +157,10 @@
         const body = JSON.parse(options.body || '{}');
         const log = document.getElementById('dmp-harness-log');
         if (log) log.textContent += '\nPOST /picker/fusion ' + JSON.stringify(body);
+        if (body.lead?.kind === 'native' && body.sidekick?.kind === 'native') {
+          const officialUid = 'fusion-' + body.lead.uid + '-sidekick-' + body.sidekick.uid;
+          if (visibleModelConfigs.some(item => item.modelUid === officialUid)) return ok({ uid: officialUid });
+        }
         slotToggle = slotToggle === 'a' ? 'b' : 'a';
         return ok({ uid: 'fusion-dmp-' + slotToggle });
       }
@@ -325,12 +341,22 @@
         if (typeof cost.multiplier === 'number') return { label: (+cost.multiplier.toFixed(3)) + 'x', tooltip: 'Devin Credits：按量计费' };
         return null;
       },
-      selectedModels: [], recentlyUsedModels: [], modelSorts: [],
+      selectedModels: ['swe-2-high'], recentlyUsedModels: [], modelSorts: [],
       onModelSelect(payload) {
         selected.push(payload);
         if (log) log.textContent += '\nonModelSelect ' + JSON.stringify(payload);
-        button.querySelector('[data-label]').textContent = payload.modelUid;
-        pickerProps.value = payload.modelUid;
+        const uid = payload && payload.modelUid;
+        hostProps.selectedModels = uid ? [uid] : [];
+        pickerProps.value = uid;
+        const cfg = (root.visibleModelConfigs || []).find(entry => entry?.modelUid === uid);
+        const labelNode = button.querySelector('[data-label]');
+        if (labelNode) {
+          // Official fusion routers render familyLabel ("Fusion"); the picker
+          // rewrites that text node to the concrete pair.
+          labelNode.textContent = cfg?.familyUid === 'fusion'
+            ? (cfg.familyLabel || 'Fusion')
+            : (cfg?.label || uid || '');
+        }
       },
     };
     const pickerProps = { connectorId: 'c', modelConfig: {}, value: 'swe-2-high',
