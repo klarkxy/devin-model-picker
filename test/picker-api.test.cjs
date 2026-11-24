@@ -162,6 +162,84 @@ test('native fusion candidates carry family identity from observed natives', () 
   assert.equal(lead.effortOrder, 2);
 });
 
+test('native sidekick candidates expose officialLeads from observed fusion routers', () => {
+  const { buildCatalog, collectNativeModels } = require('../src/catalog.cjs');
+  const { pickerState } = require('../src/picker-api.cjs');
+  const natives = { clientModelConfigs: [
+    { modelUid: 'claude-opus-5-5-high', label: 'Claude Opus 5.5 High',
+      modelInfo: { harnessUids: ['swe-1p5'], isModelRouter: false } },
+    { modelUid: 'swe-2-high', label: 'SWE-2 High',
+      modelInfo: { harnessUids: ['swe-1p6'], isModelRouter: false } },
+    { modelUid: 'swe-2-max', label: 'SWE-2 Max',
+      modelInfo: { harnessUids: ['swe-1p6'], isModelRouter: false } },
+    { modelUid: 'fusion-claude-opus-5-5-high-sidekick-swe-2-high', label: 'F',
+      modelInfo: { harnessUids: ['fusion'], isModelRouter: true },
+      modelFamilyMetadata: { entries: [
+        { key: 'Lead', value: { order: 1, name: 'Claude Opus 5.5 High' } },
+        { key: 'Effort', value: { order: 2, name: 'High' } },
+        { key: 'Sidekick', value: { order: 1, name: 'SWE-2 High' } },
+      ] } },
+    { modelUid: 'fusion-claude-opus-5-5-high-sidekick-swe-2-max', label: 'F2', disabled: true,
+      modelInfo: { harnessUids: ['fusion'], isModelRouter: true },
+      modelFamilyMetadata: { entries: [
+        { key: 'Lead', value: { order: 1, name: 'Claude Opus 5.5 High' } },
+        { key: 'Effort', value: { order: 2, name: 'High' } },
+        { key: 'Sidekick', value: { order: 2, name: 'SWE-2 Max' } },
+      ] } },
+  ] };
+  const observed = collectNativeModels(natives, { rpc: 'GetCliModelConfigs', format: { json: true } });
+  const config = { providers: providers() };
+  const catalog = buildCatalog(config, observed);
+  const observedNatives = new Map(observed.map(entry => [entry.uid, entry]));
+  const state = pickerState({ version: 'x', catalog, config, observedNatives });
+  const sidekicks = state.fusionCandidates.sidekicks;
+  assert.deepEqual(sidekicks.find(c => c.ref.uid === 'swe-2-high').officialLeads,
+    ['claude-opus-5-5-high']);
+  assert.deepEqual(sidekicks.find(c => c.ref.uid === 'swe-2-max').officialLeads, [],
+    'a disabled official router does not count');
+  const byokSidekick = sidekicks.find(c => c.ref.kind === 'byok');
+  assert.ok(byokSidekick && !('officialLeads' in byokSidekick), 'BYOK candidates carry no field');
+  const bare = pickerState({ version: 'x', catalog, config });
+  assert.deepEqual(bare.fusionCandidates.sidekicks.find(c => c.ref.uid === 'swe-2-high').officialLeads, [],
+    'missing observedNatives behaves as empty');
+
+  // Self-pairing (`leadUid === sidekickUid`) and ambiguous `-sidekick-` substrings must not misclassify.
+  const trickyNatives = { clientModelConfigs: [
+    { modelUid: 'alpha-sidekick-beta', label: 'Alpha Sidekick Beta',
+      modelInfo: { harnessUids: ['swe-1p5', 'swe-1p6'], isModelRouter: false } },
+    { modelUid: 'beta', label: 'Beta',
+      modelInfo: { harnessUids: ['swe-1p5', 'swe-1p6'], isModelRouter: false } },
+    { modelUid: 'fusion-alpha-sidekick-beta-sidekick-alpha-sidekick-beta', label: 'Self',
+      modelInfo: { harnessUids: ['fusion'], isModelRouter: true },
+      modelFamilyMetadata: { entries: [
+        { key: 'Lead', value: { order: 1, name: 'Alpha Sidekick Beta' } },
+        { key: 'Effort', value: { order: 1, name: 'High' } },
+        { key: 'Sidekick', value: { order: 1, name: 'Alpha Sidekick Beta' } },
+      ] } },
+    { modelUid: 'fusion-alpha-sidekick-beta-sidekick-beta', label: 'Valid Tricky',
+      modelInfo: { harnessUids: ['fusion'], isModelRouter: true },
+      modelFamilyMetadata: { entries: [
+        { key: 'Lead', value: { order: 1, name: 'Alpha Sidekick Beta' } },
+        { key: 'Effort', value: { order: 1, name: 'High' } },
+        { key: 'Sidekick', value: { order: 2, name: 'Beta' } },
+      ] } },
+  ] };
+  const trickyObs = collectNativeModels(trickyNatives, { rpc: 'GetCliModelConfigs', format: { json: true } });
+  const trickyCatalog = buildCatalog(config, trickyObs);
+  const trickyMap = new Map(trickyObs.map(entry => [entry.uid, entry]));
+  const trickyState = pickerState({ version: 'x', catalog: trickyCatalog, config, observedNatives: trickyMap });
+  assert.deepEqual(
+    trickyState.fusionCandidates.sidekicks.find(c => c.ref.uid === 'alpha-sidekick-beta').officialLeads,
+    [],
+    'leadUid === sidekickUid is skipped even if an official-looking router exists',
+  );
+  assert.deepEqual(
+    trickyState.fusionCandidates.sidekicks.find(c => c.ref.uid === 'beta').officialLeads,
+    ['alpha-sidekick-beta'],
+    'forward lookup handles -sidekick- inside lead UIDs without lastIndexOf ambiguity',
+  );
+});
+
 test('BYOK fusion candidate familyLabel drops the catalog effort suffix', () => {
   const { buildCatalog } = require('../src/catalog.cjs');
   const { candidates } = require('../src/picker-api.cjs');

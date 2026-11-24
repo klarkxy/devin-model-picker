@@ -3,12 +3,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const picker = require('../media/picker.js');
 
 test('picker.js exports pure helpers under node', () => {
-  for (const key of ['cardName', 'effortLabel', 'filterNorm', 'groupCards', 'groupFusion', 'prefillFusion', 'defaultVariant']) {
+  for (const key of ['cardName', 'effortLabel', 'filterNorm', 'groupCards', 'groupFusion', 'prefillFusion',
+    'defaultVariant', 'pairingTag', 'fusionPairLabel', 'triggerSelectionUid', 'triggerPairText',
+    'acceptTriggerTextNode']) {
     assert.equal(typeof picker[key], 'function', key);
   }
+  assert.deepEqual(picker.TRIGGER_LABEL_DELAYS, [60, 300, 1000, 2500]);
 });
 
 test('cardName splits name/version/variant per the naming table', () => {
@@ -141,6 +145,122 @@ test('prefillFusion parses dmp slots and official fusion uids', () => {
   assert.equal(missing.lead, null);
   assert.deepEqual(missing.sidekick, { kind: 'native', uid: 'swe-2-high' });
   assert.equal(picker.prefillFusion('swe-2-high', state, candidates).startedInFusion, false);
+});
+
+test('pairingTag flags official native pairs and unofficial mixes', () => {
+  const side = { ref: { kind: 'native', uid: 'swe-2-high' }, officialLeads: ['claude-opus-5-5-high'] };
+  assert.equal(picker.pairingTag({ kind: 'byok', uid: 'dmp-1' }, side), null, 'BYOK lead → no tag');
+  assert.equal(picker.pairingTag(null, side), null, 'no lead → no tag');
+  assert.equal(picker.pairingTag({ kind: 'native', uid: 'claude-opus-5-5-high' }, null), null, 'no candidate → no tag');
+  assert.equal(picker.pairingTag({ kind: 'native', uid: 'claude-opus-5-5-high' }, side), 'official');
+  assert.equal(picker.pairingTag({ kind: 'native', uid: 'gpt-6-1' }, side), 'unofficial',
+    'native lead outside officialLeads');
+  assert.equal(picker.pairingTag({ kind: 'native', uid: 'claude-opus-5-5-high' },
+    { ref: { kind: 'byok', uid: 'dmp-2' } }), 'unofficial', 'native lead + BYOK sidekick');
+});
+
+test('fusionPairLabel extracts the concrete pair from official fusion labels', () => {
+  assert.equal(picker.fusionPairLabel(
+    { familyUid: 'fusion', label: 'Fusion (Claude Opus 5.5 Medium + SWE-2 Medium)' }),
+    'Claude Opus 5.5 Medium + SWE-2 Medium');
+  assert.equal(picker.fusionPairLabel(
+    { familyUid: 'fusion', label: 'Fusion (Claude Opus 5.5 Medium Fast + SWE-2 Medium)' }),
+    'Claude Opus 5.5 Medium Fast + SWE-2 Medium', 'Fast stays inside the parentheses');
+  assert.equal(picker.fusionPairLabel({ familyUid: 'other', label: 'Fusion (A + B)' }), null,
+    'non-fusion family → null');
+  assert.equal(picker.fusionPairLabel({ familyUid: 'fusion', label: 'Fusion' }), null,
+    'label without parentheses → null');
+  assert.equal(picker.fusionPairLabel(null), null);
+  assert.equal(picker.fusionPairLabel(
+    { familyUid: 'fusion', label: '融合 (Claude Opus 5.5 High + SWE-2 High)' }),
+    'Claude Opus 5.5 High + SWE-2 High', 'localized Fusion still yields the pair');
+  assert.equal(picker.fusionPairLabel(
+    { familyUid: 'fusion', label: '融合（Claude Opus 5.5 High + SWE-2 High）' }),
+    'Claude Opus 5.5 High + SWE-2 High', 'fullwidth parentheses');
+  assert.equal(picker.fusionPairLabel(
+    { familyUid: 'fusion', label: 'Fusion（Opus High + SWE High）' }),
+    'Opus High + SWE High');
+});
+
+test('triggerPairText prefers live root.value over stale selectedModels after official pair switch', () => {
+  const pairA = 'fusion-claude-opus-5-5-high-sidekick-swe-2-high';
+  const pairB = 'fusion-claude-opus-5-5-medium-sidekick-swe-2-high';
+  const host = {
+    selectedModels: [pairA],
+    visibleModelConfigs: [
+      { modelUid: pairA, familyUid: 'fusion', label: 'Fusion (Claude Opus 5.5 High + SWE-2 High)' },
+      { modelUid: pairB, familyUid: 'fusion', label: 'Fusion (Claude Opus 5.5 Medium + SWE-2 High)' },
+    ],
+  };
+  assert.equal(picker.triggerPairText({ root: { value: pairA } }, host),
+    'Claude Opus 5.5 High + SWE-2 High', 'same-tick rewrite still shows pair A');
+  // ACP has not confirmed: selectedModels is still A, but the picker value moved.
+  // A selectedModels-only reader would keep pair A on the trigger.
+  assert.equal(picker.triggerPairText({ root: { value: pairB } }, host),
+    'Claude Opus 5.5 Medium + SWE-2 High',
+    'currentValue wins over stale selectedModels when no characterData fires');
+  assert.equal(picker.fusionPairLabel(host.visibleModelConfigs.find(m => m.modelUid === host.selectedModels[0])),
+    'Claude Opus 5.5 High + SWE-2 High');
+  host.selectedModels = [pairB];
+  assert.equal(picker.triggerPairText({ root: { value: pairB } }, host),
+    'Claude Opus 5.5 Medium + SWE-2 High');
+  assert.equal(picker.triggerPairText({ root: {} }, host),
+    'Claude Opus 5.5 Medium + SWE-2 High', 'falls back to selectedModels when value is empty');
+  assert.equal(picker.triggerSelectionUid({ root: {} }, { selectedModels: [] }), null);
+  assert.equal(picker.triggerSelectionUid({ root: {} }, { selectedModels: [pairA, pairB] }), null,
+    'multi-select does not pick an arbitrary uid');
+});
+
+test('acceptTriggerTextNode skips svg, aria-hidden, and the classic-switch affordance', () => {
+  const node = (value, hits) => ({
+    nodeValue: value,
+    parentElement: { closest: sel => hits.includes(sel) ? {} : null },
+  });
+  assert.equal(picker.acceptTriggerTextNode(node('Fusion', [])), true);
+  assert.equal(picker.acceptTriggerTextNode(node('  pair  ', [])), true);
+  assert.equal(picker.acceptTriggerTextNode(node('Fusion', ['svg'])), false);
+  assert.equal(picker.acceptTriggerTextNode(node('Fusion', ['[aria-hidden="true"]'])), false);
+  assert.equal(picker.acceptTriggerTextNode(node('Fusion', ['[data-dmp-native-switch]'])), false);
+  assert.equal(picker.acceptTriggerTextNode(node('   ', [])), false);
+  assert.equal(picker.acceptTriggerTextNode(null), false);
+});
+
+test('trigger label refresh is delayed independently of panelState and bound per trigger', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8');
+  const select = source.slice(source.indexOf('function selectModel'), source.indexOf('function refreshLocated'));
+  const refresh = source.slice(source.indexOf('function refreshLocated'), source.indexOf('function openMenu'));
+  const delayed = source.slice(source.indexOf('function scheduleDelayedTriggerLabels'),
+    source.indexOf('function bind()'));
+  const labels = source.slice(source.indexOf('function refreshTriggerLabels'),
+    source.indexOf('let triggerLabelsScheduled'));
+  const observer = source.slice(source.indexOf('const labelObserver'),
+    source.indexOf('const themeObserver'));
+  const bind = source.slice(source.indexOf('function bind()'), source.indexOf('function scheduleBind'));
+  const menus = source.slice(source.indexOf('function bindMenus'), source.indexOf('function refreshTriggerLabels'));
+  const fusionCard = source.slice(source.indexOf('function buildFusionCard'), source.indexOf('function slotChip'));
+
+  assert.ok(select.includes('scheduleDelayedTriggerLabels'),
+    'selectModel must re-read labels after ACP, not only on the next frame');
+  assert.ok(select.includes('scheduleTriggerLabels'));
+  assert.ok(delayed.includes('TRIGGER_LABEL_DELAYS'));
+  assert.ok(!delayed.includes('panelState') && !delayed.includes('panel '),
+    'delayed label refresh must outlive the panel');
+  assert.ok(refresh.includes('scheduleTriggerLabels'),
+    'refreshLocated must rewrite the trigger when live value changes');
+  assert.ok(labels.includes('triggerSelectionUid') && labels.includes('__dmpOrigText')
+    && labels.includes('data-devin-zh-skip'),
+    'rewrite prefers currentValue, caches original text, and skips zh-hans');
+  assert.ok(observer.includes('observeTriggerLabel') || observer.includes('labelObserver.observe(button'));
+  assert.ok(!observer.includes('document.documentElement') && !observer.includes('document.body'),
+    'labelObserver must not watch the whole document');
+  assert.ok(bind.includes('observeTriggerLabel(button)'));
+  assert.ok(menus.includes('scheduleDelayedTriggerLabels'),
+    'native-menu selection also schedules the delayed label refresh');
+  assert.ok(fusionCard.includes("activeSlot === 'sidekick' && !blocked && costVariant?.ref"),
+    'blocked lead cards in the sidekick slot do not get 官方/非官方 tags');
+  assert.ok(!source.includes('此组合下 lead') && !source.includes('消耗更多 lead'),
+    'unofficial-pair copy uses 主模型, not English lead');
+  assert.match(source, /非官方配对：主模型可能承担更多工作/);
 });
 
 test('filterNorm ignores case, dashes, dots and spaces so gpt5 finds GPT-5', () => {
@@ -656,4 +776,369 @@ test('clipboardStatus reports success only after writeText resolves', async () =
   assert.ok(action.includes('clipboardStatus'));
   assert.ok(action.includes('.then'), 'toast waits for clipboardStatus');
   assert.ok(!action.includes("?.catch?.(() => {})"), 'failed writes are no longer swallowed before the toast');
+});
+
+test('DOM regression: trigger label clears data-devin-zh-skip on single model and fusion cards hide badges when blocked', async () => {
+  const frames = [];
+  const timers = [];
+  let timerId = 1;
+  function matchSimple(node, part) {
+    if (!node || node.nodeType !== 1) return false;
+    let rest = part.trim();
+    const nots = [];
+    rest = rest.replace(/:not\(([^)]+)\)/g, (_, inner) => { nots.push(inner); return ''; });
+    for (const neg of nots) if (matchSimple(node, neg)) return false;
+    const tagMatch = rest.match(/^[a-zA-Z0-9_-]+/);
+    if (tagMatch) {
+      if (node.tagName !== tagMatch[0].toUpperCase()) return false;
+      rest = rest.slice(tagMatch[0].length);
+    }
+    while (rest.length) {
+      if (rest[0] === '.') {
+        const m = rest.match(/^\.([a-zA-Z0-9_-]+)/);
+        if (!m || !node.classList.contains(m[1])) return false;
+        rest = rest.slice(m[0].length);
+      } else if (rest[0] === '#') {
+        const m = rest.match(/^#([a-zA-Z0-9_-]+)/);
+        if (!m || node.id !== m[1]) return false;
+        rest = rest.slice(m[0].length);
+      } else if (rest[0] === '[') {
+        const m = rest.match(/^\[([^=\]]+)(?:="([^"]*)")?\]/);
+        if (!m) return false;
+        if (!node.hasAttribute(m[1])) return false;
+        if (m[2] !== undefined && node.getAttribute(m[1]) !== m[2]) return false;
+        rest = rest.slice(m[0].length);
+      } else {
+        return false;
+      }
+    }
+    return true;
+  }
+  function matchSelector(node, sel) {
+    const parts = sel.trim().split(/\s+/);
+    if (!matchSimple(node, parts[parts.length - 1])) return false;
+    let cur = node.parentElement;
+    for (let i = parts.length - 2; i >= 0; i--) {
+      while (cur && !matchSimple(cur, parts[i])) cur = cur.parentElement;
+      if (!cur) return false;
+      cur = cur.parentElement;
+    }
+    return true;
+  }
+  function makeNode(nodeType, tagOrText) {
+    const attrs = Object.create(null);
+    const children = [];
+    const listeners = new Map();
+    const classes = new Set();
+    let idVal = '';
+    const node = {
+      nodeType,
+      tagName: nodeType === 1 ? String(tagOrText).toUpperCase() : undefined,
+      childNodes: children,
+      get children() { return children.filter(c => c.nodeType === 1); },
+      get firstChild() { return children[0] || null; },
+      get nextSibling() {
+        const p = node.parentElement;
+        if (!p) return null;
+        const i = p.childNodes.indexOf(node);
+        return i >= 0 ? p.childNodes[i + 1] || null : null;
+      },
+      get previousElementSibling() {
+        const p = node.parentElement;
+        if (!p) return null;
+        const els = p.children;
+        const i = els.indexOf(node);
+        return i > 0 ? els[i - 1] : null;
+      },
+      parentElement: null,
+      style: {},
+      offsetWidth: 720,
+      scrollTop: 0,
+      disabled: false,
+      value: '',
+      title: '',
+      placeholder: '',
+      get id() { return idVal; },
+      set id(v) { idVal = String(v || ''); if (idVal) attrs.id = idVal; else delete attrs.id; },
+      classList: {
+        add(...names) { for (const n of names) if (n) classes.add(n); },
+        remove(...names) { for (const n of names) classes.delete(n); },
+        toggle(n, force) {
+          const on = force === undefined ? !classes.has(n) : !!force;
+          if (on) classes.add(n); else classes.delete(n);
+          return on;
+        },
+        contains(n) { return classes.has(n); },
+      },
+      get className() { return [...classes].join(' '); },
+      set className(v) { classes.clear(); for (const c of String(v || '').split(/\s+/)) if (c) classes.add(c); },
+      setAttribute(name, value) {
+        const val = value == null ? '' : String(value);
+        attrs[name] = val;
+        if (name === 'id') idVal = val;
+      },
+      getAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null; },
+      hasAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name); },
+      removeAttribute(name) { delete attrs[name]; if (name === 'id') idVal = ''; },
+      appendChild(child) {
+        if (child.parentElement) child.parentElement.removeChild(child);
+        children.push(child);
+        child.parentElement = node;
+        return child;
+      },
+      insertBefore(child, ref) {
+        if (!ref) return node.appendChild(child);
+        if (child.parentElement) child.parentElement.removeChild(child);
+        const i = children.indexOf(ref);
+        if (i < 0) children.push(child); else children.splice(i, 0, child);
+        child.parentElement = node;
+        return child;
+      },
+      removeChild(child) {
+        const i = children.indexOf(child);
+        if (i >= 0) { children.splice(i, 1); child.parentElement = null; }
+        return child;
+      },
+      replaceChildren(...items) {
+        while (children.length) node.removeChild(children[0]);
+        for (const item of items) node.appendChild(item);
+      },
+      remove() { if (node.parentElement) node.parentElement.removeChild(node); },
+      contains(target) {
+        if (target === node) return true;
+        return children.some(c => c.contains(target));
+      },
+      closest(sel) {
+        let cur = node;
+        while (cur) {
+          if (cur.nodeType === 1 && sel.split(',').some(s => matchSelector(cur, s))) return cur;
+          cur = cur.parentElement;
+        }
+        return null;
+      },
+      querySelectorAll(sel) {
+        const out = [];
+        const parts = sel.split(',');
+        const walk = cur => {
+          for (const c of cur.children) {
+            if (parts.some(p => matchSelector(c, p))) out.push(c);
+            walk(c);
+          }
+        };
+        walk(node);
+        return out;
+      },
+      querySelector(sel) { return node.querySelectorAll(sel)[0] || null; },
+      addEventListener(type, fn) {
+        if (!listeners.has(type)) listeners.set(type, []);
+        listeners.get(type).push(fn);
+      },
+      removeEventListener(type, fn) {
+        const list = listeners.get(type);
+        if (list) listeners.set(type, list.filter(f => f !== fn));
+      },
+      dispatchEvent(ev) {
+        ev.target = ev.target || node;
+        for (const fn of [...(listeners.get(ev.type) || [])]) fn(ev);
+      },
+      click() { node.dispatchEvent({ type: 'click', stopPropagation() {}, preventDefault() {}, stopImmediatePropagation() {} }); },
+      focus() {},
+      getBoundingClientRect() { return { top: 400, bottom: 424, left: 100, right: 200, width: 100, height: 24 }; },
+    };
+    if (nodeType === 3) {
+      let val = String(tagOrText || '');
+      Object.defineProperty(node, 'nodeValue', { get: () => val, set: v => { val = String(v); } });
+      Object.defineProperty(node, 'textContent', { get: () => val, set: v => { val = String(v); } });
+    } else {
+      Object.defineProperty(node, 'textContent', {
+        get: () => children.map(c => c.textContent).join(''),
+        set: v => {
+          while (children.length) node.removeChild(children[0]);
+          if (v !== '' && v != null) node.appendChild(makeNode(3, String(v)));
+        },
+      });
+    }
+    return node;
+  }
+  const createDomSandbox = () => {
+    const head = makeNode(1, 'head');
+    const body = makeNode(1, 'body');
+    const htmlEl = makeNode(1, 'html');
+    htmlEl.appendChild(head);
+    htmlEl.appendChild(body);
+    const store = new Map();
+    const winListeners = new Map();
+    const docListeners = new Map();
+    const s = {
+      console: { log() {}, warn() {}, error() {} },
+      Response,
+      AbortSignal,
+      AbortController,
+      URL,
+      NodeFilter: { SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2 },
+      MutationObserver: class { observe() {} disconnect() {} },
+      localStorage: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) },
+      matchMedia: () => ({ matches: false }),
+      getComputedStyle: () => ({ backgroundColor: 'rgb(255, 255, 255)', fontFamily: 'sans-serif' }),
+      requestAnimationFrame: fn => frames.push(fn),
+      setTimeout: (fn, delay = 0) => { const id = timerId++; timers.push({ id, fn, delay }); return id; },
+      clearTimeout: id => { const i = timers.findIndex(t => t.id === id); if (i >= 0) timers.splice(i, 1); },
+      innerWidth: 1280,
+      innerHeight: 800,
+      addEventListener(type, fn) {
+        if (!winListeners.has(type)) winListeners.set(type, []);
+        winListeners.get(type).push(fn);
+      },
+      removeEventListener(type, fn) {
+        const list = winListeners.get(type);
+        if (list) winListeners.set(type, list.filter(f => f !== fn));
+      },
+      document: {
+        documentElement: htmlEl,
+        head,
+        body,
+        activeElement: null,
+        createElement: tag => makeNode(1, tag),
+        createTextNode: text => makeNode(3, text),
+        getElementById: id => htmlEl.querySelector('#' + id),
+        querySelector: sel => htmlEl.querySelector(sel),
+        querySelectorAll: sel => htmlEl.querySelectorAll(sel),
+        elementsFromPoint: () => [],
+        addEventListener(type, fn) {
+          if (!docListeners.has(type)) docListeners.set(type, []);
+          docListeners.get(type).push(fn);
+        },
+        removeEventListener(type, fn) {
+          const list = docListeners.get(type);
+          if (list) docListeners.set(type, list.filter(f => f !== fn));
+        },
+        createTreeWalker(root, _what, filter) {
+          const nodes = [];
+          const walk = cur => {
+            for (const c of cur.childNodes) {
+              if (c.nodeType === 3 && (!filter || filter.acceptNode(c) === 1)) nodes.push(c);
+              walk(c);
+            }
+          };
+          walk(root);
+          let idx = -1;
+          return { nextNode() { idx++; return nodes[idx] || null; } };
+        },
+      },
+    };
+    s.window = s;
+    s.globalThis = s;
+    s.self = s;
+    return { sandbox: s, body, winListeners };
+  };
+
+  const flush = async () => {
+    for (let i = 0; i < 6; i++) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      while (frames.length) frames.shift()();
+      while (timers.length) {
+        timers.sort((a, b) => a.delay - b.delay);
+        timers.shift().fn();
+      }
+      while (frames.length) frames.shift()();
+    }
+  };
+
+  const clickTrigger = (winListeners, button) => {
+    for (const fn of winListeners.get('click') || []) {
+      fn({ target: button, altKey: false, preventDefault() {}, stopImmediatePropagation() {} });
+    }
+  };
+
+  // 1) Official Fusion A sets text and data-devin-zh-skip; switching back to single model clears it.
+  const { sandbox, body, winListeners } = createDomSandbox();
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../dev/fixture.js'), 'utf8'), sandbox);
+  const fiber = sandbox.DMP_FIBER({ visibleModelConfigs: sandbox.DMP_FIXTURE.visibleModelConfigs });
+  const pairA = 'fusion-claude-opus-5-5-high-sidekick-swe-2-high';
+  fiber.hostProps.onModelSelect({ modelUid: pairA });
+  body.appendChild(fiber.button);
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8'), sandbox);
+
+  assert.equal(fiber.button.querySelector('[data-label]').textContent, 'Claude Opus 5.5 High + SWE-2 High');
+  assert.equal(fiber.button.hasAttribute('data-devin-zh-skip'), true);
+
+  clickTrigger(winListeners, fiber.button);
+  await flush();
+  const panel = body.querySelector('.dmp-panel');
+  assert.ok(panel, 'fixture panel opened');
+  [...panel.querySelectorAll('.dmp-seg button')].find(b => b.textContent === '单模型').click();
+  panel.querySelectorAll('.dmp-card').find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'SWE' && c.querySelector('.dmp-ver')?.textContent === '2' && !c.querySelector('.dmp-var')).click();
+  await flush();
+  assert.equal(fiber.button.querySelector('[data-label]').textContent, 'SWE-2 High');
+  assert.equal(fiber.button.hasAttribute('data-devin-zh-skip'), false,
+    'switching back to a single model must clear data-devin-zh-skip');
+
+  // 2) Open panel in Fusion mode with real-data snapshot + fixture to inspect blocked lead card and official/unofficial sidekick cards.
+  const { sandbox: sandboxReal, body: bodyReal, winListeners: realWinListeners } = createDomSandbox();
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../dev/real-data.js'), 'utf8'), sandboxReal);
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../dev/fixture.js'), 'utf8'), sandboxReal);
+  const fiberReal = sandboxReal.DMP_FIBER({ visibleModelConfigs: sandboxReal.DMP_FIXTURE.visibleModelConfigs });
+  fiberReal.hostProps.onModelSelect({ modelUid: 'claude-opus-5-5-medium' });
+  bodyReal.appendChild(fiberReal.button);
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../media/picker.js'), 'utf8'), sandboxReal);
+
+  clickTrigger(realWinListeners, fiberReal.button);
+  await flush();
+  const realPanel = bodyReal.querySelector('.dmp-panel');
+  assert.ok(realPanel, 'real-data panel opened');
+  [...realPanel.querySelectorAll('.dmp-seg button')].find(b => b.textContent === 'Fusion').click();
+  await flush();
+
+  realPanel.querySelectorAll('.dmp-slot')[0].click();
+  const realLeadOpus = realPanel.querySelectorAll('.dmp-card').find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'Opus' && c.querySelector('.dmp-prov')?.textContent === 'Devin');
+  assert.ok(realLeadOpus, 'native Opus card found in lead slot');
+  [...realLeadOpus.querySelectorAll('.dmp-eff button')].find(b => b.textContent === 'M').click();
+
+  realPanel.querySelectorAll('.dmp-slot')[1].click();
+  const realSideCards = realPanel.querySelectorAll('.dmp-card');
+  const blockedOpus = realSideCards.find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'Opus' && c.querySelector('.dmp-prov')?.textContent === 'Devin');
+  assert.ok(blockedOpus && blockedOpus.classList.contains('dmp-off'), 'lead-occupied card is blocked in sidekick slot');
+  assert.equal(blockedOpus.querySelector('.dmp-role')?.textContent, '主模型');
+  assert.equal(blockedOpus.querySelector('.dmp-pair'), null, 'blocked card must NOT show 官方/非官方 badge');
+
+  const sweCard = realSideCards.find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'SWE' && c.querySelector('.dmp-ver')?.textContent === '2' && !c.querySelector('.dmp-var'));
+  assert.ok(sweCard, 'SWE-2 sidekick card exists');
+  const pairBadge = sweCard.querySelector('.dmp-pair');
+  assert.ok(pairBadge, 'unblocked sidekick card renders pairing badge');
+  assert.equal(pairBadge.textContent, '官方');
+  assert.ok(pairBadge.classList.contains('dmp-pair-ok'));
+
+  const maxBtn = [...sweCard.querySelectorAll('.dmp-eff button')].find(b => b.textContent === 'Max');
+  assert.ok(maxBtn, 'Max effort cell exists on SWE-2 card');
+  maxBtn.click();
+  const warn = realPanel.querySelector('.dmp-foot .dmp-warn');
+  assert.ok(warn, 'unofficial pair shows footer warning');
+  assert.ok(warn.textContent.includes('主模型') && !warn.textContent.includes('lead'));
+
+  // 3) Apply Official Pair -> switch to single model and confirm data-devin-zh-skip clears on trigger.
+  const sweAfter = realPanel.querySelectorAll('.dmp-card').find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'SWE' && c.querySelector('.dmp-ver')?.textContent === '2' && !c.querySelector('.dmp-var'));
+  const highBtn = [...sweAfter.querySelectorAll('.dmp-eff button')].find(b => b.textContent === 'H');
+  assert.ok(highBtn, 'High effort cell exists on SWE-2 card');
+  highBtn.click();
+  const applyBtn = realPanel.querySelector('.dmp-apply');
+  assert.ok(applyBtn && !applyBtn.disabled, 'apply button enabled for official pair');
+  applyBtn.click();
+  await flush();
+  assert.equal(fiberReal.button.querySelector('[data-label]').textContent, 'Claude Opus 5.5 Medium + SWE-2 High');
+  assert.equal(fiberReal.button.hasAttribute('data-devin-zh-skip'), true);
+
+  // selectModel keeps the panel open; switch straight back to single-model tab on realPanel.
+  [...realPanel.querySelectorAll('.dmp-seg button')].find(b => b.textContent === '单模型').click();
+  const singleSwe = realPanel.querySelectorAll('.dmp-card').find(c =>
+    c.querySelector('.dmp-name')?.textContent === 'SWE' && c.querySelector('.dmp-ver')?.textContent === '2' && !c.querySelector('.dmp-var'));
+  singleSwe.click();
+  await flush();
+  assert.equal(fiberReal.button.querySelector('[data-label]').textContent, 'SWE-2 Medium');
+  assert.equal(fiberReal.button.hasAttribute('data-devin-zh-skip'), false,
+    'switching back to a single model must clear data-devin-zh-skip from the trigger');
 });

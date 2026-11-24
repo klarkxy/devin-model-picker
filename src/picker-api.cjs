@@ -35,8 +35,12 @@ function validRef(ref) {
 function refKey(ref) { return ref.kind + ':' + ref.uid; }
 
 // CandidateView: { ref, label, providerName ('Devin' for native), effort, familyKey }
-function candidates(catalog, config) {
+// Native sidekick candidates also carry officialLeads: the eligible native
+// lead uids whose official `fusion-<lead>-sidekick-<sidekick>` router was
+// observed enabled — the same pair rule pickerFusion redirects on.
+function candidates(catalog, config, observedNatives) {
   const leads = [], sidekicks = [];
+  const eligibleLeadUids = catalog.roles?.eligibleNativeLeads;
   const providers = new Map((Array.isArray(config.providers) ? config.providers : []).map(p => [p.id, p]));
   for (const route of Object.values(catalog.routes || {})) {
     if (route.enabled === false) continue;
@@ -77,8 +81,18 @@ function candidates(catalog, config) {
       familyKey: native.familyUid || native.uid });
   }
   for (const native of catalog.roles?.eligibleNativeSidekicks?.values() || []) {
+    const officialLeads = [];
+    if (observedNatives instanceof Map && eligibleLeadUids instanceof Map) {
+      for (const leadUid of eligibleLeadUids.keys()) {
+        if (leadUid === native.uid) continue;
+        const observed = observedNatives.get('fusion-' + leadUid + '-sidekick-' + native.uid);
+        if (observed && observed.disabled !== true) officialLeads.push(leadUid);
+      }
+      officialLeads.sort();
+    }
     sidekicks.push({ ref: { kind: 'native', uid: native.uid }, label: native.label || native.uid,
       providerName: 'Devin', effort: native.effort ?? null,
+      officialLeads,
       ...(native.effortOrder != null ? { effortOrder: native.effortOrder } : {}),
       ...(native.familyLabel ? { familyLabel: native.familyLabel } : {}),
       familyKey: native.familyUid || native.uid });
@@ -98,7 +112,7 @@ function refView(ref, catalog, config) {
 }
 
 // GET /picker/state payload. Never includes apiKey or baseUrl.
-function pickerState({ version, catalog, config }) {
+function pickerState({ version, catalog, config, observedNatives }) {
   const byok = {};
   const providers = new Map((Array.isArray(config.providers) ? config.providers : []).map(p => [p.id, p]));
   for (const route of Object.values(catalog.routes || {})) {
@@ -119,7 +133,7 @@ function pickerState({ version, catalog, config }) {
       fusionSlots[slot] = { lead: refView(current.lead, catalog, config), sidekick: refView(current.sidekick, catalog, config) };
     }
   }
-  const lists = candidates(catalog, config);
+  const lists = candidates(catalog, config, observedNatives);
   return { version, enabled: config.enabled !== false, byok, fusionSlots,
     fusionCandidates: { leads: lists.leads, sidekicks: lists.sidekicks } };
 }

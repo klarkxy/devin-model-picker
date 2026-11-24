@@ -434,6 +434,63 @@ function prefillFusion(value, state, candidates) {
   return result;
 }
 
+// Official pairing: the backend marks each native sidekick candidate with the
+// lead uids whose official fusion router it observed (candidate.officialLeads).
+// A native lead plus a sidekick outside that list — native or BYOK — is an
+// unofficial pair routed through our own fusion-dmp slots.
+function pairingTag(leadRef, sidekickCandidate) {
+  if (!leadRef || leadRef.kind !== 'native' || !sidekickCandidate) return null;
+  if (sidekickCandidate.ref?.kind === 'native' &&
+      (sidekickCandidate.officialLeads || []).includes(leadRef.uid)) return 'official';
+  return 'unofficial';
+}
+
+// Official fusion renderer entries label the trigger just "Fusion": the host
+// picks familyLabel over label, so the pair inside "Fusion (Lead + Sidekick)"
+// never shows. Extract it here (Fast variants already keep "Fast" inside).
+// Accept 融合 and fullwidth parentheses so a zh-hans rewrite of the label
+// still yields the pair.
+function fusionPairLabel(model) {
+  if (model?.familyUid !== 'fusion') return null;
+  const match = /^(?:Fusion|融合)\s*[（(](.+)[)）]\s*$/i.exec(String(model?.label || ''));
+  return match ? match[1].trim() : null;
+}
+
+// Prefer the trigger's own picker value (currentValue) over host.selectedModels:
+// after an official pair switch, ACP may still report the previous uid in
+// selectedModels while root.value has already moved.
+function triggerSelectionUid(located, host) {
+  const live = located?.root?.value;
+  if (typeof live === 'string' && live) return live;
+  const selected = Array.isArray(host?.selectedModels) ? host.selectedModels : [];
+  return selected.length === 1 ? selected[0] : null;
+}
+
+function triggerPairText(located, host) {
+  const uid = triggerSelectionUid(located, host);
+  if (!uid) return null;
+  const model = (host?.visibleModelConfigs || []).find(entry => entry?.modelUid === uid);
+  return fusionPairLabel(model);
+}
+
+// Text nodes inside the classic-switch affordance, SVG chrome, or aria-hidden
+// decorations are never the composer label.
+function acceptTriggerTextNode(node) {
+  if (!node?.nodeValue || !String(node.nodeValue).trim()) return false;
+  const parent = node.parentElement;
+  if (parent && typeof parent.closest === 'function') {
+    if (parent.closest('[data-dmp-native-switch]')) return false;
+    if (parent.closest('svg')) return false;
+    if (parent.closest('[aria-hidden="true"]')) return false;
+  }
+  return true;
+}
+
+// Same cadence as refreshLocated: ACP confirmation lands around 100–300ms and
+// official Fusion → Fusion leaves React's text node at "Fusion", so we must
+// re-read labels after the round-trip even with no characterData mutation.
+const TRIGGER_LABEL_DELAYS = [60, 300, 1000, 2500];
+
 // Card preferences: order/favorites/hidden/aliases keyed by the canonical
 // cardKey ('name|version|variant', lowercase). Three independent lists —
 // single tab, fusion lead slot, fusion sidekick slot.
@@ -636,11 +693,13 @@ function priceInfo(model) {
 const PICKER_ORIGIN = 'vscode-file://vscode-app';
 const API_BASE = 'http://127.0.0.1:39852';
 const LS_KEY = 'devin-model-picker:v1';
+const UNOFFICIAL_PAIR_HINT = '非官方配对：Fusion 的协作指令按官方组合调优，此组合下主模型可能承担更多工作、消耗更多主模型额度';
 
 const exportsMap = { cardName, effortLabel, filterNorm, filterMatch, cardKey, baseLabel,
   vendorOf, VENDORS, groupCards, groupFusion, prefillFusion, defaultVariant,
   underlyingKey, matchVariant, exactVariant, dimRoles, aggregateFamily, toggleLabel, stripProvider,
-  stripEffortSuffix, fusionSlotText, clipboardStatus,
+  stripEffortSuffix, fusionSlotText, clipboardStatus, pairingTag, fusionPairLabel,
+  triggerSelectionUid, triggerPairText, acceptTriggerTextNode, TRIGGER_LABEL_DELAYS,
   validDraft, pickFusionSlots, hidesCard, sanitizePrefs, prefSets, appendNewKeys, arrangeCards, applyCardDrop, dropModeFromRatio,
   moveCardKey, toggleKey, mergeSubsetOrder, viewMode, skipsPanelHotkeys, costTagFor, selectedVariant, priceInfo,
   IDLIKE, HIDDEN_DISPLAY, LS_KEY, API_BASE };
@@ -650,7 +709,7 @@ if (typeof module === 'object' && module.exports) { module.exports = exportsMap;
 // DOM side. Everything below runs inside the workbench window.
 // ---------------------------------------------------------------------------
 if (window.__devinModelPicker) return;
-window.__devinModelPicker = { version: '0.2.1' };
+window.__devinModelPicker = { version: '0.2.2' };
 console.log('[devin-model-picker] loaded');
 
 const CSS = `
@@ -694,6 +753,11 @@ const CSS = `
 .dmp-sub-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dmp-cost{font-size:9px;color:var(--dmp-muted);border:1px solid currentColor;border-radius:4px;padding:0 3px}
 .dmp-cost.dmp-tagfree{color:#16a34a}
+.dmp-pair{font-size:9px;border:1px solid currentColor;border-radius:4px;padding:0 3px;white-space:nowrap;flex:none}
+.dmp-pair-ok{color:#16a34a}
+.dmp-pair-warn{color:#d97706}
+.dmp-warn{flex:0 1 auto;min-width:0;max-width:46%;font-size:10px;color:#d97706;
+ overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dmp-role{font-size:9px;font-weight:600;color:var(--dmp-sel);background:var(--dmp-chip);
  border:1px solid var(--dmp-sel);border-radius:4px;padding:0 4px;white-space:nowrap}
 .dmp-role.dmp-role-sk{color:var(--dmp-fg);border-color:var(--dmp-border)}
@@ -1004,6 +1068,12 @@ function selectModel(uid) {
   // value until live props confirm it, and accept whatever is live at the end.
   for (const delay of [60, 300, 1000]) setTimeout(() => refreshLocated(false), delay);
   setTimeout(() => refreshLocated(true), 2500);
+  // Official pair → official pair leaves React's text at "Fusion" — no
+  // characterData mutation fires. Refresh on the next frame and again on the
+  // same delays as refreshLocated so a closed panel or a late ACP confirm
+  // still rewrites the trigger.
+  scheduleTriggerLabels();
+  scheduleDelayedTriggerLabels();
 }
 
 // Re-walk the trigger's fiber chain — rebinding to a replacement trigger when
@@ -1026,6 +1096,7 @@ function refreshLocated(final) {
   if (live === panelState.value) return;
   panelState.value = live;
   rerenderGrid();
+  scheduleTriggerLabels();
 }
 
 // --- Context menu, drag & drop, rename --------------------------------------
@@ -1758,6 +1829,19 @@ function buildFusionCard(card, index, located, state) {
   if (isLead) top.appendChild(el('span', 'dmp-role', '主模型'));
   else if (isSidekick) top.appendChild(el('span', 'dmp-role dmp-role-sk', '辅助'));
   if (card.favorite) top.appendChild(el('span', 'dmp-star', '★'));
+  // 官方/非官方 tag: only meaningful while filling the sidekick slot against a
+  // native lead. The displayed variant (same one the cost tag prices) decides.
+  if (panelState.activeSlot === 'sidekick' && !blocked && costVariant?.ref) {
+    const cand = (state?.fusionCandidates?.sidekicks || []).find(item =>
+      item.ref.kind === costVariant.ref.kind && item.ref.uid === costVariant.ref.uid);
+    const pair = pairingTag(slots.lead, cand);
+    if (pair) {
+      const tag = el('span', 'dmp-pair ' + (pair === 'official' ? 'dmp-pair-ok' : 'dmp-pair-warn'),
+        pair === 'official' ? '官方' : '非官方');
+      tag.title = pair === 'official' ? '官方 Fusion 配对' : UNOFFICIAL_PAIR_HINT;
+      top.appendChild(tag);
+    }
+  }
   top.appendChild(el('span', 'dmp-prov', card.providerName || 'Devin'));
   node.appendChild(top);
   const displayName = prefAlias(card.prefKey) || card.name;
@@ -1994,6 +2078,15 @@ function renderFusionFooter() {
     }
     foot.insertBefore(err, apply);
   });
+  if (slots.lead && slots.sidekick) {
+    const sideCand = (lastState?.fusionCandidates?.sidekicks || []).find(item =>
+      item.ref.kind === slots.sidekick.kind && item.ref.uid === slots.sidekick.uid);
+    if (pairingTag(slots.lead, sideCand) === 'unofficial') {
+      const warn = el('span', 'dmp-warn', '非官方配对：主模型可能承担更多工作、消耗更多额度');
+      warn.title = UNOFFICIAL_PAIR_HINT;
+      foot.appendChild(warn);
+    }
+  }
   foot.appendChild(apply);
 }
 
@@ -2276,7 +2369,64 @@ function bindMenus() {
     const owner = menuOwner(fiber);
     if (!owner) continue;
     menu.insertBefore(nativeSwitch(owner), menu.firstChild);
+    const onNativeSelect = event => {
+      if (event?.target?.closest?.('[data-dmp-native-switch]')) return;
+      scheduleTriggerLabels();
+      scheduleDelayedTriggerLabels();
+    };
+    menu.addEventListener('click', onNativeSelect, true);
+    menu.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      onNativeSelect(event);
+    }, true);
   }
+}
+
+// Trigger label --------------------------------------------------------------
+// An official fusion router labels its trigger just "Fusion" (the host shows
+// familyLabel); the concrete pair sits inside the entry's "Fusion (A + B)"
+// label. Rewrite the trigger's first text node with that pair — idempotent,
+// so the characterData observer can fire freely without write loops.
+function refreshTriggerLabels() {
+  for (const button of document.querySelectorAll('button[aria-haspopup="menu"][data-dmp-bound]')) {
+    const located = locateTrigger(button);
+    const host = located?.host;
+    const uid = triggerSelectionUid(located, host);
+    const model = uid
+      ? (host?.visibleModelConfigs || []).find(entry => entry?.modelUid === uid)
+      : null;
+    const text = fusionPairLabel(model);
+    const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        return acceptTriggerTextNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      },
+    });
+    const node = walker.nextNode();
+    if (!node) continue;
+    if (text) {
+      if (button.__dmpOrigText == null) {
+        const raw = String(node.nodeValue || '').trim();
+        button.__dmpOrigText = /^(?:Fusion|融合)\b/i.test(raw) ? node.nodeValue : 'Fusion';
+      }
+      button.setAttribute('data-devin-zh-skip', '');
+      if (node.nodeValue !== text) node.nodeValue = text;
+      continue;
+    }
+    if (button.hasAttribute?.('data-devin-zh-skip')) button.removeAttribute?.('data-devin-zh-skip');
+    if (button.__dmpOrigText != null && (!uid || model?.familyUid === 'fusion')) {
+      if (node.nodeValue !== button.__dmpOrigText) node.nodeValue = button.__dmpOrigText;
+    }
+    if (uid && model?.familyUid !== 'fusion') button.__dmpOrigText = null;
+  }
+}
+let triggerLabelsScheduled = false;
+function scheduleTriggerLabels() {
+  if (triggerLabelsScheduled) return;
+  triggerLabelsScheduled = true;
+  requestAnimationFrame(() => { triggerLabelsScheduled = false; refreshTriggerLabels(); });
+}
+function scheduleDelayedTriggerLabels() {
+  for (const delay of TRIGGER_LABEL_DELAYS) setTimeout(scheduleTriggerLabels, delay);
 }
 
 // Trigger binding ------------------------------------------------------------
@@ -2295,6 +2445,7 @@ function bind() {
     if (!located) continue;
     button.setAttribute('data-dmp-bound', '');
     button.__dmpOpenChange = openChangeFor(button, located) || undefined;
+    observeTriggerLabel(button);
   }
   // The adjacent switch is the classic view's visible way back — it must exist
   // only while the native menu owns the trigger, never in cards view.
@@ -2310,6 +2461,7 @@ function bind() {
     }
   }
   bindMenus();
+  refreshTriggerLabels();
 }
 let bindScheduled = false;
 function scheduleBind() {
@@ -2352,6 +2504,15 @@ window.addEventListener('keydown', event => {
 ensureStyle();
 observer = new MutationObserver(scheduleBind);
 observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
+// React flips the trigger text to "Fusion" via characterData, which the
+// childList observer above never sees — watch text changes on bound
+// triggers only (chat/editor/terminal streaming must not retrigger a walk).
+const labelObserver = new MutationObserver(scheduleTriggerLabels);
+function observeTriggerLabel(button) {
+  if (!button || button.__dmpLabelObserved) return;
+  button.__dmpLabelObserved = true;
+  labelObserver.observe(button, { characterData: true, childList: true, subtree: true });
+}
 const themeObserver = new MutationObserver(() => {
   if (panel && panelState) {
     const dark = isDark(panelState.trigger);
