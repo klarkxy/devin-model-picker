@@ -31,6 +31,13 @@ function createPickerRefresh({ executeCommand, readModels, log = () => {}, now =
     }
     log('picker-refresh-unavailable');
   }
+  function scheduleRun() {
+    if (timer !== undefined) cancel(timer);
+    // A second refresh inside the CLI cache window would not re-fetch its
+    // model list, so defer it until the cache is stale again.
+    const delay = Math.max(debounceMs, lastRun + cliCacheMs - now());
+    timer = schedule(() => { run().catch(() => {}); }, delay);
+  }
   return {
     prime() { last = read(); },
     changed() {
@@ -38,11 +45,14 @@ function createPickerRefresh({ executeCommand, readModels, log = () => {}, now =
       const current = read();
       if (current === undefined || current === last) return false;
       last = current;
-      if (timer !== undefined) cancel(timer);
-      // A second refresh inside the CLI cache window would not re-fetch its
-      // model list, so defer it until the cache is stale again.
-      const delay = Math.max(debounceMs, lastRun + cliCacheMs - now());
-      timer = schedule(() => { run().catch(() => {}); }, delay);
+      scheduleRun();
+      return true;
+    },
+    // Signature-less fire for catalog events the cliModels signature cannot
+    // express — a server-side native release never touches BYOK entries.
+    trigger() {
+      if (disposed) return false;
+      scheduleRun();
       return true;
     },
     dispose() { disposed = true; if (timer !== undefined) cancel(timer); timer = undefined; },

@@ -10,7 +10,7 @@ const { createLsBridge } = require('./runtime/bridge.cjs');
 const { backendEnvironment } = require('./runtime/backend-env.cjs');
 const { runtimeIdentity, controlFile, PORT, MANAGEMENT_PROTOCOL } = require('./runtime/backend.cjs');
 const { readReceipt, remember, saveReceipt, valueAt, restoreObject, permitted } = require('./lifecycle/owned-settings.cjs');
-const { readNativeModels, nativeSetSignature } = require('./runtime/native-models.cjs');
+const { readNativeModels, nativeSetSignature, createNativeReleaseWatch } = require('./runtime/native-models.cjs');
 const { createPickerRefresh } = require('./runtime/picker-refresh.cjs');
 const { isHostDisabled } = require('./lifecycle/host-disabled.cjs');
 const { applyInjection, removeInjection } = require('./inject.cjs');
@@ -189,6 +189,10 @@ async function activate(context) {
   if (config().enabled !== false) void installAcp();
   const catalog = () => { const current = config(); return buildCatalog(current.enabled === false ? { ...current, providers: [] } : current, [...nativeModels.values()]); };
   const nativeModels = new Map(), localNativeModels = new Map();
+  // Created per native-sync start: the startup grace must cover the first
+  // catalog population whenever it actually happens — an extension that sat
+  // disabled for days must not mistake that first fill for a release.
+  let releaseWatch = createNativeReleaseWatch();
   let nativeCatalogStatus = 'loading', syncPending, syncAbort, syncTimer, nativeSignature;
   // Config writes arrive in bursts (connect → models merge → slot save); fold
   // them into a single host catalog refresh.
@@ -218,11 +222,22 @@ async function activate(context) {
         nativeSignature = signature;
         try { await hostCatalog?.refresh(); } catch {}
       }
+      // Harnessed uids never observed before mean a server-side release; the
+      // watch absorbs startup population and backend-restart regrowth. The
+      // cliModels signature never covers natives, so fire the picker refresh
+      // directly — a new conversation then lists the release in fresh CLI
+      // sessions without a manual restart.
+      const released = releaseWatch.observe(nativeModels.values());
+      if (released.length) {
+        log('native-release', { count: released.length, uids: released.slice(0, 20) });
+        pickerRefresh.trigger();
+      }
     })().finally(() => { if (syncAbort === abort) { syncAbort = undefined; syncPending = undefined; } });
     return syncPending;
   };
   const startNativeSync = () => {
     stopNativeSync?.();
+    releaseWatch = createNativeReleaseWatch();
     stopNativeSync = () => { clearInterval(syncTimer); syncAbort?.abort(); syncAbort = undefined; syncPending = undefined; };
     syncTimer = setInterval(() => { void refreshNativeModels(); }, 3000); syncTimer.unref?.();
     void refreshNativeModels();

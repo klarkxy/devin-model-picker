@@ -7,6 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
+const pickerRefreshModule = require('../src/runtime/picker-refresh.cjs');
 const next = () => new Promise(resolve => setImmediate(resolve));
 
 function fixture(t, initial = {}) {
@@ -45,6 +46,7 @@ function fixture(t, initial = {}) {
   const identity = { service: 'devin-model-picker', version: '0.1.0', sourceId: 's', networkId: 'n', rootId: 'r' };
   let fetchImpl = async () => new Response(JSON.stringify({ ...identity, managementProtocol: 1, instanceId: 'i', activeRequests: 0, draining: false }));
   const calls = { apply: [], remove: [], acp: [], ls: [], host: [], refresh: [], executed: [] };
+  const native = { models: initial.nativeModels || [], release: initial.nativeRelease || [] };
   let acpInstalled = { dispose() { calls.acpDisposed = (calls.acpDisposed || 0) + 1; } };
   const overrides = {
     vscode,
@@ -64,8 +66,14 @@ function fixture(t, initial = {}) {
     './runtime/host-catalog.cjs': { installHostCatalog: options => {
       calls.host.push(options); return { refresh: async () => { calls.refresh.push(1); }, dispose() {} };
     } },
-    './runtime/native-models.cjs': { readNativeModels: async () => ({ status: 'ready', models: [] }),
-      nativeSetSignature: () => '' },
+    './runtime/native-models.cjs': { readNativeModels: async () => ({ status: 'ready', models: native.models }),
+      nativeSetSignature: () => '',
+      createNativeReleaseWatch: () => ({ observe: entries => { calls.releaseObserved = [...entries].map(entry => entry?.uid); return native.release; } }) },
+    // The real refresh logic, but with the 1.5s debounce and 65s CLI cache
+    // window collapsed so a test does not wait them out.
+    './runtime/picker-refresh.cjs': { ...pickerRefreshModule,
+      createPickerRefresh: options => pickerRefreshModule.createPickerRefresh({ ...options,
+        schedule: fn => setTimeout(fn, 0), cancel: timer => clearTimeout(timer) }) },
     './lifecycle/host-disabled.cjs': { isHostDisabled: () => hostDisabled },
   };
   let hostDisabled = initial.hostDisabled === true;
@@ -83,7 +91,7 @@ function fixture(t, initial = {}) {
     globalState: { get: (k, fb) => state.has(k) ? state.get(k) : fb,
       update: async (k, v) => v === undefined ? state.delete(k) : state.set(k, v) } };
   t.after(async () => { try { await module.exports.deactivate(); } catch {} context.subscriptions.forEach(s => s.dispose?.()); });
-  return { ...module.exports, context, root, commands, logs, notices, errors, calls, agentEnv, updates,
+  return { ...module.exports, context, root, commands, logs, notices, errors, calls, agentEnv, updates, native,
     setHostDisabled: value => { hostDisabled = value === true; },
     settle: async (ticks = 30) => { for (let i = 0; i < ticks; i++) await next(); } };
 }
@@ -166,4 +174,26 @@ test('deactivate on reload keeps settings and the injection', async t => {
   assert.equal(f.agentEnv['devin-cli'].WINDSURF_API_SERVER_URL, url);
   assert.ok(!f.calls.executed.includes('workbench.action.reloadWindow'),
     'a plain reload must not schedule another one');
+});
+
+test('a server-side native release fires the picker refresh conversation', async t => {
+  const f = fixture(t, {
+    nativeModels: [{ uid: 'swe-9', label: 'SWE-9', disabled: false, isModelRouter: false, harnessUids: ['swe-9p0'] }],
+    nativeRelease: ['swe-9'],
+  });
+  await f.activate(f.context);
+  await f.settle();
+  assert.deepEqual(f.calls.releaseObserved, ['swe-9'], 'the watch observes the merged native entries');
+  assert.ok(f.calls.executed.includes('devin.newConversation'),
+    'a release starts a new conversation so fresh CLI sessions list it');
+});
+
+test('routine native sync without a release never starts a conversation', async t => {
+  const f = fixture(t, {
+    nativeModels: [{ uid: 'swe-2', label: 'SWE-2', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }],
+  });
+  await f.activate(f.context);
+  await f.settle();
+  assert.deepEqual(f.calls.releaseObserved, ['swe-2']);
+  assert.ok(!f.calls.executed.includes('devin.newConversation'));
 });

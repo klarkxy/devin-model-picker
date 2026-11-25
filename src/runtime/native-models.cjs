@@ -79,4 +79,38 @@ function nativeSetSignature(entries) {
     `${entry?.uid ?? ''}\u0000${entry?.label ?? ''}\u0000${entry?.disabled === true}`)
     .sort().join('\u0001');
 }
-module.exports = { readNativeModels, nativeSetSignature };
+// Server-side model release detection. Startup population is multi-phase —
+// renderer catalog entries land within seconds of window load while CLI-only
+// entries depend on whenever GetCliModelConfigs next flows — so observations
+// inside the grace window only extend the baseline. After it, harnessed uids
+// never seen before mean a release. The high-water set keeps backend-restart
+// regrowth and server-side re-adds from counting as new; harnessless entries
+// are unrunnable internals and never count.
+const RELEASE_GRACE_MS = 3 * 60 * 1000;
+
+function createNativeReleaseWatch({ graceMs = RELEASE_GRACE_MS, now = Date.now } = {}) {
+  const startedAt = now();
+  const seen = new Set();
+  return {
+    observe(entries) {
+      const uids = [];
+      for (const entry of entries) {
+        if (!entry || typeof entry.uid !== 'string' || !entry.uid) continue;
+        if (!Array.isArray(entry.harnessUids) || !entry.harnessUids.length) continue;
+        uids.push(entry.uid);
+      }
+      if (now() - startedAt < graceMs) {
+        for (const uid of uids) seen.add(uid);
+        return [];
+      }
+      const added = [];
+      for (const uid of uids) {
+        if (seen.has(uid)) continue;
+        seen.add(uid);
+        added.push(uid);
+      }
+      return added;
+    },
+  };
+}
+module.exports = { readNativeModels, nativeSetSignature, createNativeReleaseWatch, RELEASE_GRACE_MS };
