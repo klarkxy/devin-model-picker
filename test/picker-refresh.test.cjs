@@ -121,3 +121,18 @@ test('trigger does nothing after dispose', async () => {
   await h.fire();
   assert.deepEqual(h.commands, []);
 });
+
+test('pause cancels a pending refresh and blocks new ones until resume', async () => {
+  const h = harness();
+  h.refresh.prime();
+  h.set([]); h.refresh.changed();
+  h.refresh.pause();
+  await h.fire();
+  assert.deepEqual(h.commands, [], 'a timer armed before the pause never fires');
+  assert.equal(h.refresh.trigger(), false, 'triggers are blocked while paused');
+  assert.equal(h.refresh.changed(), false, 'changes are blocked while paused');
+  h.refresh.resume();
+  assert.equal(h.refresh.trigger(), true, 'resume re-arms the refresh');
+  await h.fire();
+  assert.deepEqual(h.commands, ['devin.newConversation']);
+});
