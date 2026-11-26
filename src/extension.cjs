@@ -256,9 +256,9 @@ async function activate(context) {
         ...(typeof entry.familyLabel === 'string' && entry.familyLabel && entry.familyLabel.length <= 256 ? { familyLabel: entry.familyLabel } : {}),
         ...(effort && Number.isSafeInteger(effort.order) && effort.order >= 0 && effort.order <= 0x7fffffff &&
             typeof effort.name === 'string' && effort.name
-          ? { modelEffortDimension: { order: effort.order, name: effort.name } } : {}),
+          ? { modelEffortDimension: { order: effort.order, name: effort.name } : {} }),
         ...(dimension && typeof dimension === 'object'
-          ? { sidekickDimension: { order: dimension.order, name: dimension.name, fastModeOrder: dimension.fastModeOrder } } : {}),
+          ? { sidekickDimension: { order: dimension.order, name: dimension.name, fastModeOrder: dimension.fastModeOrder } : {} }),
         ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
         ...(entry.maxTokens ? { maxTokens: entry.maxTokens } : {}),
         ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
@@ -349,6 +349,7 @@ async function activate(context) {
       return;
     }
     connection = injected;
+    pickerRefresh.resume();
     startNativeSync();
     void hostCatalog?.refresh();
     log('activated', { nativeVersion: native.packageJSON.version, storage: root });
@@ -443,6 +444,9 @@ async function activate(context) {
 async function teardown() {
   stopNativeSync?.(); stopNativeSync = undefined;
   clearTimeout(hostRefreshTimer); hostRefreshTimer = undefined;
+  // A refresh timer armed while the plugin was active must never open a new
+  // conversation after it is disabled; paused runs resume on the next enable.
+  pickerRefresh.pause();
   activationGeneration++; runtimeWaitAbort?.abort();
   if (connection) { const current = connection; connection = undefined; await current.dispose(); }
   try { acpInjection?.dispose(); } catch {}
