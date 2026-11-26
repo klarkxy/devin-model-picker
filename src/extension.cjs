@@ -256,9 +256,9 @@ async function activate(context) {
         ...(typeof entry.familyLabel === 'string' && entry.familyLabel && entry.familyLabel.length <= 256 ? { familyLabel: entry.familyLabel } : {}),
         ...(effort && Number.isSafeInteger(effort.order) && effort.order >= 0 && effort.order <= 0x7fffffff &&
             typeof effort.name === 'string' && effort.name
-          ? { modelEffortDimension: { order: effort.order, name: effort.name } : {} }),
+          ? { modelEffortDimension: { order: effort.order, name: effort.name } } : {}),
         ...(dimension && typeof dimension === 'object'
-          ? { sidekickDimension: { order: dimension.order, name: dimension.name, fastModeOrder: dimension.fastModeOrder } : {} }),
+          ? { sidekickDimension: { order: dimension.order, name: dimension.name, fastModeOrder: dimension.fastModeOrder } } : {}),
         ...(Array.isArray(entry.fusionMetadata) ? { fusionMetadata: entry.fusionMetadata } : {}),
         ...(entry.maxTokens ? { maxTokens: entry.maxTokens } : {}),
         ...(entry.maxOutputTokens ? { maxOutputTokens: entry.maxOutputTokens } : {}),
