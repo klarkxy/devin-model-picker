@@ -57,8 +57,6 @@ test('model-router and disabled entries never count as a release', () => {
   assert.deepEqual(h.watch.observe([entry('a'), router, disabled]), [],
     'derived routers and gated models need no CLI session refresh');
   assert.deepEqual(h.watch.observe([entry('a'), router, disabled, entry('real')]), ['real']);
-  assert.deepEqual(h.watch.observe([{ ...entry('swe-9-gated'), disabled: false }]), [],
-    'still harnessed, but unmarking a baseline-absorbed uid does not fire — wait, gated was filtered, so this is new');
 });
 
 test('a model released disabled then enabled later does fire on unlock', () => {
