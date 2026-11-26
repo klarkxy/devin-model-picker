@@ -17,13 +17,13 @@ function signatureOf(models) {
 function createPickerRefresh({ executeCommand, readModels, log = () => {}, now = Date.now,
   schedule = setTimeout, cancel = clearTimeout, debounceMs = DEBOUNCE_MS, cliCacheMs = CLI_CACHE_MS } = {}) {
   if (typeof executeCommand !== 'function' || typeof readModels !== 'function') throw new TypeError('executeCommand and readModels are required');
-  let last, timer, lastRun = -Infinity, disposed = false;
+  let last, timer, lastRun = -Infinity, disposed = false, paused = false;
   function read() {
     try { return signatureOf(readModels()); } catch { return undefined; }
   }
   async function run() {
     timer = undefined;
-    if (disposed) return;
+    if (disposed || paused) return;
     lastRun = now();
     for (const command of COMMANDS) {
       try { await executeCommand(command); log('picker-refresh', { command }); return; }
@@ -31,20 +31,38 @@ function createPickerRefresh({ executeCommand, readModels, log = () => {}, now =
     }
     log('picker-refresh-unavailable');
   }
+  function scheduleRun() {
+    if (timer !== undefined) cancel(timer);
+    // A second refresh inside the CLI cache window would not re-fetch its
+    // model list, so defer it until the cache is stale again.
+    const delay = Math.max(debounceMs, lastRun + cliCacheMs - now());
+    timer = schedule(() => { run().catch(() => {}); }, delay);
+  }
   return {
     prime() { last = read(); },
     changed() {
-      if (disposed) return false;
+      if (disposed || paused) return false;
       const current = read();
       if (current === undefined || current === last) return false;
       last = current;
-      if (timer !== undefined) cancel(timer);
-      // A second refresh inside the CLI cache window would not re-fetch its
-      // model list, so defer it until the cache is stale again.
-      const delay = Math.max(debounceMs, lastRun + cliCacheMs - now());
-      timer = schedule(() => { run().catch(() => {}); }, delay);
+      scheduleRun();
       return true;
     },
+    // Signature-less fire for catalog events the cliModels signature cannot
+    // express — a server-side native release never touches BYOK entries.
+    trigger() {
+      if (disposed || paused) return false;
+      scheduleRun();
+      return true;
+    },
+    // Pausing cancels any pending run: a disabled plugin must not open a new
+    // conversation out of a timer that was armed while it was still active.
+    pause() {
+      paused = true;
+      if (timer !== undefined) cancel(timer);
+      timer = undefined;
+    },
+    resume() { paused = false; },
     dispose() { disposed = true; if (timer !== undefined) cancel(timer); timer = undefined; },
   };
 }

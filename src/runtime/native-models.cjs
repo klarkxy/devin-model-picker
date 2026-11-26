@@ -73,10 +73,61 @@ async function readNativeModels({ root, port = PORT, signal, request = fetch }) 
   return { status: models.length ? 'ready' : 'empty', models };
 }
 // Signature used to gate host-catalog refreshes: the 3s native poll only
-// refreshes when the observed native set actually changes.
+// refreshes when the observed native set actually changes. Callers pass
+// Map.values() iterators, not arrays, so any iterable is materialized first.
 function nativeSetSignature(entries) {
-  return (Array.isArray(entries) ? entries : []).map(entry =>
+  const list = Array.isArray(entries) ? entries
+    : entries != null && typeof entries[Symbol.iterator] === 'function' ? Array.from(entries) : [];
+  return list.map(entry =>
     `${entry?.uid ?? ''}\u0000${entry?.label ?? ''}\u0000${entry?.disabled === true}`)
     .sort().join('\u0001');
 }
-module.exports = { readNativeModels, nativeSetSignature };
+// Server-side model release detection. Startup population is multi-phase —
+// renderer catalog entries land within seconds of window load while CLI-only
+// entries depend on whenever GetCliModelConfigs next flows — so observations
+// inside the grace window only extend the baseline, and the very first
+// harnessed snapshot is absorbed whenever it arrives: the CLI-side fill can
+// happen long after any wall-clock window, and mistaking it for a release
+// would hijack the user's freshly opened conversation. After priming,
+// harnessed uids never seen before mean a release. The high-water set keeps
+// backend-restart regrowth and server-side re-adds from counting as new.
+// Harnessless entries are unrunnable internals, derived model routers are
+// already covered by their base variant, and disabled entries need no CLI
+// refresh — none of them count as a release signal.
+const RELEASE_GRACE_MS = 3 * 60 * 1000;
+
+function createNativeReleaseWatch({ graceMs = RELEASE_GRACE_MS, now = Date.now } = {}) {
+  const startedAt = now();
+  const seen = new Set();
+  let harnessedPrimed = false;
+  return {
+    observe(entries) {
+      const uids = [];
+      for (const entry of entries) {
+        if (!entry || typeof entry.uid !== 'string' || !entry.uid) continue;
+        if (!Array.isArray(entry.harnessUids) || !entry.harnessUids.length) continue;
+        if (entry.isModelRouter === true) continue;
+        if (entry.disabled === true) continue;
+        uids.push(entry.uid);
+      }
+      if (!harnessedPrimed) {
+        if (!uids.length) return [];
+        harnessedPrimed = true;
+        for (const uid of uids) seen.add(uid);
+        return [];
+      }
+      if (now() - startedAt < graceMs) {
+        for (const uid of uids) seen.add(uid);
+        return [];
+      }
+      const added = [];
+      for (const uid of uids) {
+        if (seen.has(uid)) continue;
+        seen.add(uid);
+        added.push(uid);
+      }
+      return added;
+    },
+  };
+}
+module.exports = { readNativeModels, nativeSetSignature, createNativeReleaseWatch, RELEASE_GRACE_MS };

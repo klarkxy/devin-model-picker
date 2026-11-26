@@ -87,3 +87,52 @@ test('dispose cancels a pending refresh', async () => {
   assert.deepEqual(h.commands, []);
   assert.equal(h.refresh.changed(), false);
 });
+
+test('trigger starts a debounced conversation without any model change', async () => {
+  const h = harness();
+  h.refresh.prime();
+  assert.equal(h.refresh.trigger(), true);
+  assert.equal(h.timers[0].at - 1000, 1500);
+  await h.fire();
+  assert.deepEqual(h.commands, ['devin.newConversation']);
+});
+
+test('trigger defers to the CLI cache window and collapses with changed', async () => {
+  const h = harness();
+  h.refresh.prime();
+  h.set([{ uid: 'b', label: 'B' }]);
+  h.refresh.changed();
+  await h.fire();
+  const firstRun = 2500;
+  h.advance(10000);
+  assert.equal(h.refresh.trigger(), true);
+  assert.equal(h.timers[0].at, firstRun + 65000, 'a trigger inside the cache window waits it out');
+  h.set([{ uid: 'c', label: 'C' }]);
+  h.refresh.changed();
+  await h.fire();
+  assert.equal(h.commands.length, 2, 'trigger and change share one run');
+});
+
+test('trigger does nothing after dispose', async () => {
+  const h = harness();
+  h.refresh.prime();
+  h.refresh.dispose();
+  assert.equal(h.refresh.trigger(), false);
+  await h.fire();
+  assert.deepEqual(h.commands, []);
+});
+
+test('pause cancels a pending refresh and blocks new ones until resume', async () => {
+  const h = harness();
+  h.refresh.prime();
+  h.set([]); h.refresh.changed();
+  h.refresh.pause();
+  await h.fire();
+  assert.deepEqual(h.commands, [], 'a timer armed before the pause never fires');
+  assert.equal(h.refresh.trigger(), false, 'triggers are blocked while paused');
+  assert.equal(h.refresh.changed(), false, 'changes are blocked while paused');
+  h.refresh.resume();
+  assert.equal(h.refresh.trigger(), true, 'resume re-arms the refresh');
+  await h.fire();
+  assert.deepEqual(h.commands, ['devin.newConversation']);
+});
