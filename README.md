@@ -147,7 +147,7 @@ Devin CLI caches the model list per active chat session for roughly 60 seconds. 
 <details>
 <summary><strong>What happens when Devin releases a new model?</strong></summary>
 
-The extension continuously observes the native model catalog. When a never-before-seen model appears, it automatically opens a new conversation — Devin CLI only refreshes its available model list when a session is created, so the release becomes selectable in fresh sessions without any manual steps. Sessions that are already open keep the snapshot taken at creation and never update in place; that is Devin's own design.
+The extension continuously observes the native model catalog. When a never-before-seen model appears, it automatically opens a new conversation — Devin CLI only refreshes its available model list when a session is created, so the release becomes selectable in fresh sessions without any manual steps. Sessions that are already open keep the snapshot taken at creation and never update in place; that is Devin's own design. Nothing in progress is interrupted or deleted either — switch back to the previous conversation at any time to continue where you left off.
 
 </details>
 
