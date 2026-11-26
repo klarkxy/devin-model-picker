@@ -8,6 +8,10 @@ const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
 const pickerRefreshModule = require('../src/runtime/picker-refresh.cjs');
+// The real signature and release-watch implementations: stubbing them hid the
+// MapIterator bug (a Map.values() iterator collapsing to a constant empty
+// signature) — integration tests must exercise the production code paths.
+const realNativeModelsModule = require('../src/runtime/native-models.cjs');
 const next = () => new Promise(resolve => setImmediate(resolve));
 
 function fixture(t, initial = {}) {
@@ -66,8 +70,8 @@ function fixture(t, initial = {}) {
     './runtime/host-catalog.cjs': { installHostCatalog: options => {
       calls.host.push(options); return { refresh: async () => { calls.refresh.push(1); }, dispose() {} };
     } },
-    './runtime/native-models.cjs': { readNativeModels: async () => ({ status: 'ready', models: native.models }),
-      nativeSetSignature: () => '',
+    './runtime/native-models.cjs': { ...realNativeModelsModule,
+      readNativeModels: async () => ({ status: 'ready', models: native.models }),
       createNativeReleaseWatch: () => ({ observe: entries => { calls.releaseObserved = [...entries].map(entry => entry?.uid); return native.release; } }) },
     // The real refresh logic, but with the 1.5s debounce and 65s CLI cache
     // window collapsed so a test does not wait them out.
@@ -196,4 +200,18 @@ test('routine native sync without a release never starts a conversation', async 
   await f.settle();
   assert.deepEqual(f.calls.releaseObserved, ['swe-2']);
   assert.ok(!f.calls.executed.includes('devin.newConversation'));
+});
+
+test('the host catalog refresh fires through the real native signature for merged entries', async t => {
+  const f = fixture(t, {
+    nativeModels: [{ uid: 'swe-2', label: 'SWE-2', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }],
+  });
+  await f.activate(f.context);
+  await f.settle();
+  // enable() refreshes once at startup; the native sync must refresh again
+  // because the merged native entries changed the signature — if the
+  // Map.values() iterator collapsed to a constant empty signature this
+  // second refresh would never happen.
+  assert.ok(f.calls.refresh.length >= 2,
+    `expected the host catalog refresh on native entries, got ${f.calls.refresh.length}`);
 });
