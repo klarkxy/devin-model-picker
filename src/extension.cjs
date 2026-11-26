@@ -446,7 +446,7 @@ async function teardown() {
   clearTimeout(hostRefreshTimer); hostRefreshTimer = undefined;
   // A refresh timer armed while the plugin was active must never open a new
   // conversation after it is disabled; paused runs resume on the next enable.
-  pickerRefresh.pause();
+  pickerRefresh?.pause();
   activationGeneration++; runtimeWaitAbort?.abort();
   if (connection) { const current = connection; connection = undefined; await current.dispose(); }
   try { acpInjection?.dispose(); } catch {}
