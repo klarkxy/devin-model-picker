@@ -14,7 +14,7 @@ const { readNativeModels, nativeSetSignature, createNativeReleaseWatch } = requi
 const { createPickerRefresh } = require('./runtime/picker-refresh.cjs');
 const { isHostDisabled } = require('./lifecycle/host-disabled.cjs');
 const { applyInjection, removeInjection } = require('./inject.cjs');
-let stopNativeSync, hostRefreshTimer;
+let stopNativeSync, hostRefreshTimer, pickerRefresh;
 let restoreOnHostDisable;
 let connection;
 let acpInjection;
@@ -411,7 +411,7 @@ async function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('devinModelPicker.reinject', run(async () => {
     applyPicker();
   })));
-  const pickerRefresh = createPickerRefresh({ log,
+  pickerRefresh = createPickerRefresh({ log,
     executeCommand: command => vscode.commands.executeCommand(command),
     // The CLI-side list includes hidden BYOK models, so its signature only
     // changes when uids actually appear or disappear — not on visibility toggles.
