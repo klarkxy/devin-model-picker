@@ -97,7 +97,8 @@ function fixture(t, initial = {}) {
   t.after(async () => { try { await module.exports.deactivate(); } catch {} context.subscriptions.forEach(s => s.dispose?.()); });
   return { ...module.exports, context, root, commands, logs, notices, errors, calls, agentEnv, updates, native,
     setHostDisabled: value => { hostDisabled = value === true; },
-    settle: async (ticks = 30) => { for (let i = 0; i < ticks; i++) await next(); } };
+    settle: async (ticks = 30) => { for (let i = 0; i < ticks; i++) await next(); },
+    until: async (fn, ticks = 200) => { for (let i = 0; i < ticks && !fn(); i++) await next(); } };
 }
 
 test('an active legacy extension blocks activation with a Chinese error', async t => {
@@ -186,8 +187,9 @@ test('a server-side native release fires the picker refresh conversation', async
     nativeRelease: ['swe-9'],
   });
   await f.activate(f.context);
-  await f.settle();
+  await f.until(() => f.calls.releaseObserved);
   assert.deepEqual(f.calls.releaseObserved, ['swe-9'], 'the watch observes the merged native entries');
+  await f.until(() => f.calls.executed.includes('devin.newConversation'));
   assert.ok(f.calls.executed.includes('devin.newConversation'),
     'a release starts a new conversation so fresh CLI sessions list it');
 });
@@ -197,6 +199,7 @@ test('routine native sync without a release never starts a conversation', async 
     nativeModels: [{ uid: 'swe-2', label: 'SWE-2', disabled: false, isModelRouter: false, harnessUids: ['swe-1p6'] }],
   });
   await f.activate(f.context);
+  await f.until(() => f.calls.releaseObserved);
   await f.settle();
   assert.deepEqual(f.calls.releaseObserved, ['swe-2']);
   assert.ok(!f.calls.executed.includes('devin.newConversation'));
